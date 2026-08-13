@@ -1,0 +1,3 @@
+services:
+  api:
+    working_dir: /opt/myapp

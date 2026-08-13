@@ -1,0 +1,5 @@
+services:
+  api:
+    command: /opt/myapp/api
+    depends_on:
+      - not_exists

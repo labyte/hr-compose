@@ -1,0 +1,4 @@
+services:
+  api:
+    command: /opt/myapp/api
+    unknown_field: 1

@@ -1,0 +1,30 @@
+# hr-compose.yml 完整示例
+# 所有字段值直接透传 systemd 对应指令，取值以 systemd 为准。
+version: "1.0"
+services:
+  # 依赖 redis，启动时先启 redis
+  api:
+    command: /opt/myapp/api            # ExecStart，必须前台运行，不要 daemon
+    working_dir: /opt/myapp            # WorkingDirectory
+    user: appuser                      # User
+    group: appuser                     # Group
+    environment:                       # Environment=，每行一条
+      - "DB_ADDR=127.0.0.1:3306"
+      - "LOG_LEVEL=info"
+    restart: on-failure                # Restart
+    restart_sec: 5                     # RestartSec
+    stop_timeout: 30                   # TimeoutStopSec，优雅停止宽限期（秒）
+    memory_max: 2G                     # MemoryMax
+    cpu_quota: 200%                    # CPUQuota
+    std_output: journal                # StandardOutput/StandardError：journal 默认
+    depends_on:                        # After= + Wants=，仅控制启动顺序
+      - redis
+
+  # 日志由 redis 自己写 /var/log/redis/redis.log，hr-compose logs 提示 tail 查看
+  redis:
+    command: /opt/redis/redis-server /opt/redis/redis.conf
+    working_dir: /opt/redis
+    user: appuser
+    restart: always
+    std_output: "null"                 # 丢弃 stdout/stderr（null 需加引号，否则视为未配置→journal）
+    log_file: /var/log/redis/redis.log # 仅用于 logs 命令的 tail 提示

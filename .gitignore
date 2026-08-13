@@ -1,0 +1,14 @@
+# 构建产物
+/bin/
+/dist/
+
+# 测试产物
+*.test
+*.out
+coverage.txt
+
+# 系统
+.DS_Store
+
+# Claude Code 本地配置
+.claude/

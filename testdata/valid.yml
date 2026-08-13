@@ -1,0 +1,24 @@
+services:
+  api:
+    command: /opt/myapp/api
+    working_dir: /opt/myapp
+    user: appuser
+    group: appuser
+    environment:
+      - "DB_ADDR=127.0.0.1:3306"
+      - "LOG_LEVEL=info"
+    restart: on-failure
+    restart_sec: 5
+    stop_timeout: 30
+    memory_max: 2G
+    cpu_quota: 200%
+    std_output: journal
+    depends_on:
+      - redis
+  redis:
+    command: /opt/redis/redis-server /opt/redis/redis.conf
+    working_dir: /opt/redis
+    user: appuser
+    restart: always
+    std_output: "null"
+    log_file: /var/log/redis/redis.log
