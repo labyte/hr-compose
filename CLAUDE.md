@@ -69,6 +69,7 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 
 ## 易错点
 
+- **`-f` 简写归 `logs` 的 `--follow` 专用**：root 的 `--file` 有意不设简写，否则 cobra 合并子命令标志集时因重复 `-f` panic。回归测试 `TestLogsFlagShorthandNoConflict` 保护，新增全局/子命令标志时勿用 `-f` 简写。
 - **`std_output: null` 必须加引号**：未加引号的 `null` 是 YAML null 字面量，等价于"未配置"，会被当作默认 `journal`。要真正丢弃输出需写 `std_output: "null"`。`EffectiveStdOutput()` 处理这一语义。
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize。
 - **`ps` 的行为**：遍历 yml 中定义的服务逐个 `systemctl show`；unit 未加载时输出 `-` 空状态，不报错。

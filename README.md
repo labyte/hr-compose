@@ -114,7 +114,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | `logs [name] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发 | `hr-compose logs api -f` |
 | `config` | 校验 yml 并打印生成的 unit 内容（调试用） | `hr-compose config` |
 
-全局参数：`-f, --file <path>` 指定编排文件（默认当前目录 `hr-compose.yml`）。
+全局参数：`--file <path>` 指定编排文件（默认当前目录 `hr-compose.yml`）。注意 `-f` 是 `logs` 的 `--follow` 简写。
 
 ---
 
