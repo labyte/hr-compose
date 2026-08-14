@@ -168,6 +168,7 @@ MEMORY 列为 systemd 报告的内存字节数，自动格式化为 `K / M / G` 
 version: "1.0"
 services:
   api:
+    description: 主业务 API 服务          # Description，服务描述
     command: /opt/myapp/api            # ExecStart，必须前台运行，不要 daemon
     working_dir: /opt/myapp            # WorkingDirectory
     user: appuser                      # User
