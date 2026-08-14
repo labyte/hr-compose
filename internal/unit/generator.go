@@ -25,7 +25,7 @@ func Generate(name string, svc *config.Service) (*Generated, error) {
 	b.WriteString(ManagedMark + " -- 由 hr-compose 生成，请勿手动编辑，改动会被覆盖\n")
 
 	b.WriteString("\n[Unit]\n")
-	fmt.Fprintf(&b, "Description=hr-compose service %s\n", name)
+	fmt.Fprintf(&b, "Description=%s\n", svc.EffectiveDescription(name))
 	if len(svc.DependsOn) > 0 {
 		deps := make([]string, 0, len(svc.DependsOn))
 		for _, d := range svc.DependsOn {

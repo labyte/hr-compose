@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 hr-compose 是一个对标简化版 docker-compose 的 Go CLI：读取 `hr-compose.yml` 编排文件，在 Linux 裸机上基于 **systemd** 管理多个自研业务服务的启停与编排。核心设计原则是**复用 systemd，不重复造轮子**——进程监控、自启、重启、日志全交给 systemd，CLI 只做编排解析、unit 生成与 systemctl/journalctl 封装，保持薄。
 
-命令：`init` / `up` / `down` / `restart [name]` / `ps` / `logs [name] [-f]` / `config`。无 project 概念，只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统其他 unit。
+命令：`init` / `up` / `start` / `stop` / `restart [name]` / `enable` / `disable` / `down` / `ps` / `logs [name] [-f]` / `config [name]`。无 project 概念，只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统其他 unit。
 
 ## 设计原则（改动时须遵循）
 
@@ -46,8 +46,8 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 ```
 
 - **`internal/config`**：`Service` 结构体字段名即 yaml 字段名（`working_dir`、`stop_timeout` 等）。字段值**直接透传给对应 systemd 指令，不做 compose 语义翻译**，取值以 systemd 为准。校验：services 非空、`command` 必填、`depends_on` 只能引用已定义服务、服务名字符集限小写字母/数字/`-`/`_`（服务名会拼成 unit 文件名）。
-- **`internal/unit`**：`Generate()` 把配置渲染成 unit 文本。头部写入 `# MANAGED BY hr-compose` 标记（`unit.ManagedMark`）+ 内容 hash。字段 → systemd 指令的映射关系：`command`→`ExecStart`、`working_dir`→`WorkingDirectory`、`restart_sec`→`RestartSec`、`stop_signal`→`KillSignal`、`stop_timeout`→`TimeoutStopSec`、`memory_max`→`MemoryMax`、`cpu_quota`→`CPUQuota`、`environment`→每行 `Environment=`、`std_output`→`StandardOutput=`/`StandardError=`、`depends_on`→`After=`+`Wants=`。
-- **`internal/engine`**：`order()` 对 `depends_on` 做拓扑排序（依赖者在前，排序后按名字稳定输出）；`up` 按序写 unit→daemon-reload→enable→start；`down` 逆序 stop→disable→删文件。`writeIfChanged` 保证 up 幂等（内容不变不重写）。
+- **`internal/unit`**：`Generate()` 把配置渲染成 unit 文本。头部写入 `# MANAGED BY hr-compose` 标记（`unit.ManagedMark`）+ 内容 hash。字段 → systemd 指令的映射关系：`description`→`Description`（空值经 `Service.EffectiveDescription` 回退为 `hr-compose service <name>`）、`command`→`ExecStart`、`working_dir`→`WorkingDirectory`、`restart_sec`→`RestartSec`、`stop_signal`→`KillSignal`、`stop_timeout`→`TimeoutStopSec`、`memory_max`→`MemoryMax`、`cpu_quota`→`CPUQuota`、`environment`→每行 `Environment=`、`std_output`→`StandardOutput=`/`StandardError=`、`depends_on`→`After=`+`Wants=`。
+- **`internal/engine`**：`order()` 对 `depends_on` 做拓扑排序（依赖者在前，排序后按名字稳定输出）；`up` 按序写 unit→daemon-reload→enable→start，用 `writeIfManaged` 保证幂等并拒绝覆盖非托管同名 unit；`down` 逆序 stop→disable→删文件（`removeIfManaged` 只删托管文件）。cli 层 `up` 命令在成功后再调 `e.Ps()` 展示服务状态。
 - **`internal/systemctl`**：`Client` 是接口（`Enable/Disable/Start/Stop/Restart/DaemonReload/Show`），`Real` 是真实实现；`Show` 用 `systemctl show` 文本输出解析成 map（兼容老 systemd，不依赖 JSON）。
 
 ### 通用流程（各命令共享的不变式）
@@ -59,13 +59,13 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 
 ## 规划中的功能（勿与既有实现冲突）
 
-来自迭代路线，尚未实现：`.env` 环境变量替换、`stop`/`start`（停不删 unit）、日志磁盘空间保护（journald drop-in 限额、logrotate `copytruncate`）、目录隔离（多目录同服务名自动加前缀）、`scale` 多实例、校验 command 路径存在、命令/路径/服务名补全。设计这些功能时注意：`std_output` 语义、`ManagedMark` 删除保护、服务名即 unit 文件名的约束都已有测试覆盖。
+来自迭代路线，尚未实现：`.env` 环境变量替换、日志磁盘空间保护（journald drop-in 限额、logrotate `copytruncate`）、目录隔离（多目录同服务名自动加前缀）、`scale` 多实例、校验 command 路径存在、命令/路径/服务名补全。设计这些功能时注意：`std_output` 语义、`ManagedMark` 删除保护、服务名即 unit 文件名的约束都已有测试覆盖。
 
 ## 关键安全约束（改动时勿破坏）
 
-1. **down 删除保护**：`removeIfManaged` 只删除内容以 `# MANAGED BY hr-compose` 开头的 unit 文件，防止误删同名系统服务。服务名可能碰巧与系统已有 unit 冲突，属已知风险。
+1. **unit 托管保护（删除 + 覆盖）**：`down` 用 `removeIfManaged` 只删带 `# MANAGED BY hr-compose` 标记的 unit；`up` 用 `writeIfManaged` 拒绝覆盖非该标记的同名 unit。两者共同防止误删/误覆盖同名系统服务。服务名可能碰巧与系统已有 unit 冲突，属已知风险。
 2. **服务名即文件名**：`validateServiceName` 限制字符集，防止注入路径。
-3. **root 权限**：操作 `/etc/systemd/system` 需要 sudo，`up`/`down`/`restart` 必须提权；`ps`/`logs`/`config` 只读无需提权。
+3. **root 权限**：操作 `/etc/systemd/system` 需要 sudo，`up`/`down`/`start`/`stop`/`restart` 必须提权；`ps`/`logs`/`config` 只读无需提权。
 
 ## 易错点
 
@@ -73,13 +73,13 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 - **`std_output: null` 必须加引号**：未加引号的 `null` 是 YAML null 字面量，等价于"未配置"，会被当作默认 `journal`。要真正丢弃输出需写 `std_output: "null"`。`EffectiveStdOutput()` 处理这一语义。
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize。
 - **`ps` 的行为**：遍历 yml 中定义的服务逐个 `systemctl show`；unit 未加载时输出 `-` 空状态，不报错。
-- **`ps` 用手动定宽而非 tabwriter**：`text/tabwriter` 会把 ANSI 转义码计入列宽导致错位，`ps` 采用 `%-*s` 手动填充列宽 + 状态列后包颜色码（先填充再着色，颜色不参与宽度计算）。勿改回 tabwriter 上色。
+- **`ps` 用 go-pretty 渲染**：`text/tabwriter` 或手动定宽会把 ANSI 转义码计入列宽导致错位，改用 `github.com/jedib0t/go-pretty/v6`（会剥离 ANSI 计算可见宽度，可安全把 `text.Colors.Sprint` 生成的彩色字符串直接作为单元格）。列：NAME / ACTIVE / SUB / ENABLED（`UnitFileState` 是否开机启动）/ PID / MEMORY / DESCRIPTION；状态列用 `stateColors` 着色、`formatBytes` 格式化内存、`valueOrDash` 处理空值。勿改回 tabwriter 上色。
 - **`logs` 的分发**：按 `std_output` 值分流——`journal`（默认）执行 `journalctl -u <svc>.service`（`-f` 跟随）；`file:<p>` / `append:<p>` / `"null"` 只打印 `tail -f` 提示，不真正执行 tail。`log_file` 字段仅用于 null 模式的 tail 提示，不参与 systemd 配置。
 
 ## 测试约定
 
 - 引擎测试通过 `fakeSys`（实现 `systemctl.Client`，记录调用序列）断言动作顺序；`UnitDir` 是包级**变量**（非 const）供测试覆盖为 `t.TempDir()`——新增依赖系统调用的逻辑时沿用该模式。
-- `ps` 的彩色输出通过包级变量 `stdout`（写入目标）与 `colorOverride`（颜色强制开关 `""/always/never`）覆盖测试；颜色逻辑在 `color.go`（`colorsOn`/`stateColor`），不新增外部依赖。
+- `ps` 的彩色输出通过包级变量 `stdout`（写入目标）与 `colorOverride`（颜色强制开关 `""/always/never`）覆盖测试；颜色逻辑在 `color.go`（`colorsOn`/`stateColors`）。
 - `config` 测试用 `t.TempDir()` 写 fixture yaml 后 `Load`，断言合法/非法用例。
 - `testdata/` 下有 valid 与 3 个 invalid 样例，`e2e/README.md` 有完整冒烟流程。
 - 注释、错误信息、README 均为中文，新增代码保持中文注释风格。

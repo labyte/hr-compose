@@ -129,14 +129,32 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | 命令 | 说明 | 示例 |
 | --- | --- | --- |
 | `init` | 生成默认 `hr-compose.yml` 模板（已存在则不覆盖） | `hr-compose init` |
-| `up` | 生成 unit 并启动全部服务，遵循 `depends_on` 顺序；重复执行幂等 | `sudo hr-compose up` |
+| `up` | 生成 unit 并启动全部服务，遵循 `depends_on` 顺序；重复执行幂等，完成后自动展示各服务状态 | `sudo hr-compose up` |
+| `start [name]` | 启动已安装的服务（不重生成 unit），不指定则全部；需先 `up` 过 | `sudo hr-compose start` |
+| `stop [name]` | 停止服务（保留 unit 与 enable，不删除），不指定则全部 | `sudo hr-compose stop api` |
 | `down` | 停止并清理全部服务，删除 unit 文件 | `sudo hr-compose down` |
 | `restart [name]` | 重启指定服务，不指定则全部 | `sudo hr-compose restart api` |
-| `ps` | 列出 yml 中各服务状态（ACTIVE / SUB / PID / MEMORY），终端下状态彩色显示（active 绿 / failed 红 / activating 黄） | `hr-compose ps` |
+| `enable [name]` | 设置服务开机启动（仅 enable，不启停），不指定则全部 | `sudo hr-compose enable api` |
+| `disable [name]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
+| `ps` | 带边框列出服务状态表（含 ENABLED 开机启动 / DESCRIPTION 描述列），内存自动转友好单位，终端下状态彩色显示 | `hr-compose ps` |
 | `logs [name] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发 | `hr-compose logs api -f` |
-| `config` | 校验 yml 并打印生成的 unit 内容（调试用） | `hr-compose config` |
+| `config [name]` | 校验 yml 并打印生成的 unit 内容，可指定单个服务 | `hr-compose config api` |
 
 全局参数：`--file <path>` 指定编排文件（默认当前目录 `hr-compose.yml`）。注意 `-f` 是 `logs` 的 `--follow` 简写。
+
+### ps 状态列说明
+
+`hr-compose ps` 的两列状态来自 systemd：
+
+| 列 | 对应 systemd | 含义 |
+| --- | --- | --- |
+| **ACTIVE** | `ActiveState` | 生命周期总状态：`active` 运行 / `inactive` 未运行 / `activating` 启动中 / `deactivating` 停止中 / `failed` 失败 / `reloading` 重载中 |
+| **SUB** | `SubState` | 动作子状态：`running` 运行 / `exited` 已退出 / `dead` 已停止 / `listening` 监听中 / `auto-restart` 自动重启等 |
+| **ENABLED** | `UnitFileState` | 是否开机启动：`enabled` 已启用 / `disabled` 未启用 / `static` 等 |
+
+MEMORY 列为 systemd 报告的内存字节数，自动格式化为 `K / M / G` 友好单位（未统计时显示 `-`）。
+
+开机启动状态用 `enable` / `disable` 命令修改（`up` 会自动 enable，`down` 会 disable）。
 
 ---
 
@@ -181,6 +199,7 @@ services:
 
 | 字段 | 说明 | 写入的 systemd 指令 |
 | --- | --- | --- |
+| `description` | 服务描述（默认 `hr-compose service <name>`） | `Description` |
 | `command` | 启动命令（**必须前台运行，不要 daemon**，必填） | `ExecStart` |
 | `working_dir` | 工作目录 | `WorkingDirectory` |
 | `user` / `group` | 运行身份 / 运行组 | `User` / `Group` |
@@ -210,9 +229,10 @@ services:
 
 ## 注意事项
 
-- **需要 root**：`up` / `down` / `restart` 操作 systemd（`/etc/systemd/system`），需 `sudo`。`ps` / `logs` / `config` 为只读，普通用户即可。
+- **需要 root**：`up` / `down` / `start` / `stop` / `restart` 操作 systemd（`/etc/systemd/system`），需 `sudo`。`ps` / `logs` / `config` 为只读，普通用户即可。
+- **`stop` 与 `down` 的区别**：`stop` 只停进程，保留 unit 文件与 enable 状态（可随时 `start` 恢复）；`down` 会删除 unit 并 disable（下次要 `up` 重建）。临时停服用 `stop`。
 - **服务名即 unit 文件名**：服务名只用小写字母、数字、`-`、`_`；避免与系统已有 unit 同名冲突。
-- **删除保护**：生成的 unit 文件头部有 `# MANAGED BY hr-compose` 标记，`down` 只删除带该标记的文件，防止误删同名系统服务。
+- **删除/覆盖保护**：unit 文件头部有 `# MANAGED BY hr-compose` 标记；`down` 只删除带该标记的文件，`up` 也不会覆盖非该标记的同名 unit——防止误删/误覆盖同名系统服务。如确需让 hr-compose 托管某个同名 unit，先删除原文件再 `up`。
 - **`std_output: null` 必须加引号**：不加引号是 YAML 的 `null` 字面量，等价于"未配置"，会被当作默认 `journal`。
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize，否则 systemd 会认为服务未启动。
 - **无 project 概念**：工具只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统上其他 unit。

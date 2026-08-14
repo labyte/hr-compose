@@ -10,6 +10,10 @@ var upCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return e.Up()
+		if err := e.Up(); err != nil {
+			return err
+		}
+		// up 完成后直接展示全部服务状态
+		return e.Ps()
 	},
 }

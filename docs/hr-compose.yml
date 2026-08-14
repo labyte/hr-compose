@@ -4,6 +4,7 @@ version: "1.0"
 services:
   # 依赖 redis，启动时先启 redis
   api:
+    description: 主业务 API 服务          # Description，服务描述
     command: /opt/myapp/api            # ExecStart，必须前台运行，不要 daemon
     working_dir: /opt/myapp            # WorkingDirectory
     user: appuser                      # User

@@ -10,6 +10,7 @@ const defaultTemplate = `# hr-compose.yml
 # 由 hr-compose init 生成，请按需修改后再使用 hr-compose up。
 #
 # 字段说明（取值直接透传 systemd 指令，语义以 systemd 为准）：
+#   description   服务描述，写入 unit 的 Description（默认 "hr-compose service <name>"）
 #   command       必填。启动命令，必须前台运行，不要 daemon
 #   working_dir   工作目录
 #   user / group  运行身份 / 运行组
@@ -29,6 +30,7 @@ version: "1.0"
 services:
   # 示例服务：取消注释并按需修改
   # app:
+  #   description: 主业务 API 服务
   #   command: /opt/myapp/app
   #   working_dir: /opt/myapp
   #   user: www

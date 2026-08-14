@@ -2,19 +2,27 @@ package engine
 
 import (
 	"fmt"
+	"io"
+	"strings"
 
 	"hr.compose/internal/unit"
 )
 
-// Config 打印每个服务生成的 systemd unit 内容，用于校验与调试。
-func (e *Engine) Config() error {
-	for _, name := range e.order() {
-		g, err := unit.Generate(name, e.cfg.Services[name])
+// Config 打印生成的服务 unit 内容，用于校验与调试。name 为空则打印全部，否则只打印指定服务。
+func (e *Engine) Config(name string) error {
+	names, err := e.resolve(name)
+	if err != nil {
+		return err
+	}
+	var b strings.Builder
+	for _, n := range names {
+		g, err := unit.Generate(n, e.cfg.Services[n])
 		if err != nil {
 			return err
 		}
-		fmt.Printf("# ===== %s =====\n", g.UnitPath)
-		fmt.Print(g.Content)
+		fmt.Fprintf(&b, "# ===== %s =====\n", g.UnitPath)
+		b.WriteString(g.Content)
 	}
-	return nil
+	_, err = io.WriteString(stdout, b.String())
+	return err
 }

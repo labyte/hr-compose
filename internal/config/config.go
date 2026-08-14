@@ -17,6 +17,7 @@ type Config struct {
 
 // Service 单个服务的编排配置。字段值直接透传 systemd 指令，不做语义翻译。
 type Service struct {
+	Description string   `yaml:"description"`
 	Command     string   `yaml:"command"`
 	WorkingDir  string   `yaml:"working_dir"`
 	User        string   `yaml:"user"`
@@ -31,6 +32,14 @@ type Service struct {
 	StdOutput   string   `yaml:"std_output"`
 	LogFile     string   `yaml:"log_file"`
 	DependsOn   []string `yaml:"depends_on"`
+}
+
+// EffectiveDescription 返回写入 unit 的 Description 值，空值用默认占位。
+func (s *Service) EffectiveDescription(name string) string {
+	if s.Description == "" {
+		return "hr-compose service " + name
+	}
+	return s.Description
 }
 
 // EffectiveStdOutput 返回生效的 std_output 值，空值按 journal 处理。

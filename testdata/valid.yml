@@ -1,5 +1,6 @@
 services:
   api:
+    description: 主业务 API 服务
     command: /opt/myapp/api
     working_dir: /opt/myapp
     user: appuser

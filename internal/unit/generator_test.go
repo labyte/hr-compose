@@ -67,3 +67,25 @@ func TestGenerateNoDependsOn(t *testing.T) {
 		t.Error("should not emit After/Wants without depends_on")
 	}
 }
+
+func TestGenerateDescription(t *testing.T) {
+	svc := &config.Service{Command: "/opt/bin/x", Description: "主业务 API 服务"}
+	g, err := Generate("x", svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(g.Content, "Description=主业务 API 服务") {
+		t.Errorf("自定义 description 应写入 Description=\n%s", g.Content)
+	}
+}
+
+func TestGenerateDefaultDescription(t *testing.T) {
+	svc := &config.Service{Command: "/opt/bin/x"}
+	g, err := Generate("x", svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(g.Content, "Description=hr-compose service x") {
+		t.Errorf("未配置 description 时应使用默认值\n%s", g.Content)
+	}
+}

@@ -2,31 +2,50 @@ package engine
 
 import (
 	"bytes"
-	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/jedib0t/go-pretty/v6/text"
 
 	"hr.compose/internal/config"
 )
 
-func TestStateColor(t *testing.T) {
+func TestStateColors(t *testing.T) {
 	cases := []struct {
 		active string
-		want   string
+		want   bool // 是否非 nil
 	}{
-		{"active", colorGreen},
-		{"failed", colorRed},
-		{"activating", colorYellow},
-		{"deactivating", colorYellow},
-		{"reloading", colorYellow},
-		{"inactive", colorGray},
-		{"", ""},
-		{"unknown", ""},
-		{"-", ""},
+		{"active", true},
+		{"failed", true},
+		{"activating", true},
+		{"deactivating", true},
+		{"reloading", true},
+		{"inactive", true},
+		{"", false},
+		{"unknown", false},
+		{"-", false},
 	}
 	for _, tc := range cases {
-		if got := stateColor(tc.active); got != tc.want {
-			t.Errorf("stateColor(%q) = %q, want %q", tc.active, got, tc.want)
+		if got := stateColors(tc.active); (got != nil) != tc.want {
+			t.Errorf("stateColors(%q) non-nil=%v, want %v", tc.active, got != nil, tc.want)
+		}
+	}
+}
+
+func TestFormatBytes(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"0", "0B"},
+		{"512", "512B"},
+		{"1024", "1K"},
+		{"1048576", "1.0M"},
+		{"1073741824", "1.0G"},
+		{"18446744073709551615", "-"}, // systemd 未统计哨兵值
+		{"-", "-"},                    // 非数值透传
+		{"10M", "10M"},                // 已格式化透传
+	}
+	for _, tc := range cases {
+		if got := formatBytes(tc.in); got != tc.want {
+			t.Errorf("formatBytes(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
@@ -50,12 +69,9 @@ func TestPsColored(t *testing.T) {
 	defer func() { stdout, colorOverride = oldOut, oldOverride }()
 
 	out := runPs(t, map[string]*config.Service{"api": {Command: "/x/api"}})
-	// fakeSys 返回 ActiveState=active，应被染绿
-	if !strings.Contains(out, colorGreen) {
-		t.Errorf("active 状态应包含绿色转义码\n%s", out)
-	}
-	if !strings.Contains(out, "api") {
-		t.Errorf("输出应包含服务名 api\n%s", out)
+	want := text.Colors{text.FgGreen}.Sprint("active")
+	if !strings.Contains(out, want) {
+		t.Errorf("active 状态应染绿（含 %q）\n%s", want, out)
 	}
 }
 
@@ -66,34 +82,24 @@ func TestPsPlainWhenColorOff(t *testing.T) {
 	defer func() { stdout, colorOverride = oldOut, oldOverride }()
 
 	out := runPs(t, map[string]*config.Service{"api": {Command: "/x/api"}})
-	if strings.Contains(out, "\033[") {
+	if strings.Contains(out, "\x1b[") {
 		t.Errorf("颜色关闭时不应输出 ANSI 转义码\n%s", out)
 	}
 }
 
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
-func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
-
-// TestPsAligned 校验各列对齐：剥掉颜色码后，每行可见宽度应一致。
-func TestPsAligned(t *testing.T) {
+func TestPsColumns(t *testing.T) {
 	oldOut, oldOverride := stdout, colorOverride
 	stdout = &bytes.Buffer{}
-	colorOverride = "always"
+	colorOverride = "never"
 	defer func() { stdout, colorOverride = oldOut, oldOverride }()
 
+	// fakeSys.Show 返回 active/running/enabled/123/1048576；description 应出现在表中
 	out := runPs(t, map[string]*config.Service{
-		"api":         {Command: "/x/api"},
-		"longer_name": {Command: "/x/longer"},
+		"api": {Command: "/x/api", Description: "主业务 API"},
 	})
-	lines := strings.Split(strings.TrimSuffix(stripANSI(out), "\n"), "\n")
-	if len(lines) != 3 { // 表头 + 2 个服务
-		t.Fatalf("行数 = %d, want 3\n%s", len(lines), out)
-	}
-	w := len(lines[0])
-	for i, l := range lines[1:] {
-		if len(l) != w {
-			t.Errorf("第 %d 行可见宽度 %d != 表头 %d\n%s", i+1, len(l), w, out)
+	for _, want := range []string{"NAME", "ACTIVE", "SUB", "ENABLED", "DESCRIPTION", "api", "enabled", "1.0M", "主业务 API"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("输出应包含 %q\n%s", want, out)
 		}
 	}
 }

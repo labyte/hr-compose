@@ -2,9 +2,9 @@ package cli
 
 import "github.com/spf13/cobra"
 
-var configCmd = &cobra.Command{
-	Use:   "config [name]",
-	Short: "校验编排文件并打印生成的 service 内容，可指定服务",
+var startCmd = &cobra.Command{
+	Use:   "start [name]",
+	Short: "启动服务，不指定则启动全部（需先 up 安装 unit）",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		e, err := load()
@@ -15,6 +15,6 @@ var configCmd = &cobra.Command{
 		if len(args) > 0 {
 			name = args[0]
 		}
-		return e.Config(name)
+		return e.Start(name)
 	},
 }

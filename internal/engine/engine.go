@@ -34,7 +34,7 @@ func (e *Engine) Up() error {
 		if err != nil {
 			return err
 		}
-		if err := writeIfChanged(filepath.Join(UnitDir, g.UnitPath), g.Content); err != nil {
+		if err := writeIfManaged(filepath.Join(UnitDir, g.UnitPath), g.Content); err != nil {
 			return err
 		}
 		if err := e.sys.DaemonReload(); err != nil {
@@ -67,10 +67,23 @@ func (e *Engine) Down() error {
 	return e.sys.DaemonReload()
 }
 
-// writeIfChanged 仅在内容变化时写入 unit 文件，保证 up 幂等。
-func writeIfChanged(path, content string) error {
-	if b, err := os.ReadFile(path); err == nil && string(b) == content {
-		return nil
+// writeIfManaged 只在目标不存在或是 hr-compose 托管文件时写入：
+//   - 非托管同名文件 → 拒绝覆盖（与 down 的删除保护对称）
+//   - 托管且内容一致 → 跳过（幂等）
+//   - 托管且内容变化 → 覆盖
+func writeIfManaged(path, content string) error {
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return os.WriteFile(path, []byte(content), 0o644)
+	}
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(string(b), unit.ManagedMark) {
+		return fmt.Errorf("拒绝覆盖 %s：已存在同名 unit 且非 hr-compose 管理（如确需托管请先删除原文件）", path)
+	}
+	if string(b) == content {
+		return nil // 内容一致，幂等跳过
 	}
 	return os.WriteFile(path, []byte(content), 0o644)
 }

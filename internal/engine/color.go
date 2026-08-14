@@ -2,14 +2,8 @@ package engine
 
 import (
 	"os"
-)
 
-const (
-	colorReset  = "\033[0m"
-	colorRed    = "\033[31m"
-	colorGreen  = "\033[32m"
-	colorYellow = "\033[33m"
-	colorGray   = "\033[90m"
+	"github.com/jedib0t/go-pretty/v6/text"
 )
 
 // colorOverride 测试用颜色强制开关：""（自动）、"always"、"never"。
@@ -36,17 +30,17 @@ func colorsOn() bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
-// stateColor 按 ActiveState 返回颜色码；未知/未加载状态返回空串（不着色）。
-func stateColor(active string) string {
+// stateColors 按 ActiveState 返回 go-pretty 颜色；未知/未加载状态返回 nil（不着色）。
+func stateColors(active string) text.Colors {
 	switch active {
 	case "active":
-		return colorGreen
+		return text.Colors{text.FgGreen}
 	case "failed":
-		return colorRed
+		return text.Colors{text.FgRed}
 	case "activating", "deactivating", "reloading":
-		return colorYellow
+		return text.Colors{text.FgYellow}
 	case "inactive":
-		return colorGray
+		return text.Colors{text.FgHiBlack}
 	}
-	return ""
+	return nil
 }

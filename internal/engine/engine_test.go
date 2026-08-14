@@ -7,6 +7,7 @@ import (
 
 	"hr.compose/internal/config"
 	"hr.compose/internal/systemctl"
+	"hr.compose/internal/unit"
 )
 
 // fakeSys 记录调用序列，便于断言动作顺序。
@@ -24,7 +25,13 @@ func (f *fakeSys) DaemonReload() error {
 	return nil
 }
 func (f *fakeSys) Show(u string) (map[string]string, error) {
-	return map[string]string{"ActiveState": "active", "SubState": "running", "MainPID": "123", "MemoryCurrent": "10M"}, nil
+	return map[string]string{
+		"ActiveState":   "active",
+		"SubState":      "running",
+		"UnitFileState": "enabled",
+		"MainPID":       "123",
+		"MemoryCurrent": "1048576",
+	}, nil
 }
 
 var _ systemctl.Client = (*fakeSys)(nil)
@@ -145,5 +152,72 @@ func TestResolveUnknownService(t *testing.T) {
 	e := New(cfg, &fakeSys{})
 	if _, err := e.resolve("nope"); err == nil {
 		t.Error("want error for unknown service")
+	}
+}
+
+func TestUpRefusesForeignUnit(t *testing.T) {
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	foreign := "# original systemd unit\n[Service]\nExecStart=/bin/true\n"
+	if err := os.WriteFile(filepath.Join(UnitDir, "api.service"), []byte(foreign), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api": {Command: "/x/api"},
+	}}
+	if err := New(cfg, &fakeSys{}).Up(); err == nil {
+		t.Fatal("存在非托管同名 unit 时 up 应报错")
+	}
+	if b, _ := os.ReadFile(filepath.Join(UnitDir, "api.service")); string(b) != foreign {
+		t.Error("外部 unit 不应被改写")
+	}
+}
+
+func TestUpOverwritesManagedUnit(t *testing.T) {
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	oldContent := unit.ManagedMark + " -- 旧版本\n[Service]\nExecStart=/old\n"
+	if err := os.WriteFile(filepath.Join(UnitDir, "api.service"), []byte(oldContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api": {Command: "/x/api"},
+	}}
+	if err := New(cfg, &fakeSys{}).Up(); err != nil {
+		t.Fatal(err)
+	}
+	g, err := unit.Generate("api", cfg.Services["api"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(UnitDir, "api.service")); string(b) != g.Content {
+		t.Error("托管 unit 内容变化时应覆盖为最新内容")
+	}
+}
+
+func TestUpSkipsUnchanged(t *testing.T) {
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api": {Command: "/x/api"},
+	}}
+	g, err := unit.Generate("api", cfg.Services["api"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(UnitDir, "api.service"), []byte(g.Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(cfg, &fakeSys{}).Up(); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(UnitDir, "api.service")); string(b) != g.Content {
+		t.Error("内容一致时不应改写")
 	}
 }

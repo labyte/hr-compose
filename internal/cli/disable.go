@@ -2,9 +2,9 @@ package cli
 
 import "github.com/spf13/cobra"
 
-var configCmd = &cobra.Command{
-	Use:   "config [name]",
-	Short: "校验编排文件并打印生成的 service 内容，可指定服务",
+var disableCmd = &cobra.Command{
+	Use:   "disable [name]",
+	Short: "取消服务开机启动（仅 disable，不删 unit），不指定则全部",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		e, err := load()
@@ -15,6 +15,6 @@ var configCmd = &cobra.Command{
 		if len(args) > 0 {
 			name = args[0]
 		}
-		return e.Config(name)
+		return e.Disable(name)
 	},
 }
