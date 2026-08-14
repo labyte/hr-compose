@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/labyte/hr-compose/internal/cli"
+	"hr.compose/internal/cli"
 )
 
 // version 由构建时通过 -ldflags 注入，如 make build / goreleaser。

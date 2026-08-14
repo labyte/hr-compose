@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/labyte/hr-compose/internal/config"
+	"hr.compose/internal/config"
 )
 
 func TestGenerate(t *testing.T) {

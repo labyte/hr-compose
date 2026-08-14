@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/labyte/hr-compose/internal/config"
-	"github.com/labyte/hr-compose/internal/systemctl"
+	"hr.compose/internal/config"
+	"hr.compose/internal/systemctl"
 )
 
 // fakeSys 记录调用序列，便于断言动作顺序。

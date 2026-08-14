@@ -3,7 +3,7 @@ package engine
 import (
 	"fmt"
 
-	"github.com/labyte/hr-compose/internal/unit"
+	"hr.compose/internal/unit"
 )
 
 // Config 打印每个服务生成的 systemd unit 内容，用于校验与调试。

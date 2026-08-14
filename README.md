@@ -66,11 +66,32 @@ hr-compose --help
 
 > 平台对应：`uname -m` 输出 `x86_64` → `amd64`，`aarch64` / `arm64` → `arm64`；macOS 本地用 `hr-compose_1.0.0_darwin_arm64.tar.gz`。也可在 [Releases 页面](https://github.com/labyte/hr-compose/releases) 直接下载对应平台压缩包。
 
+### 更新
+
+重新执行在线安装命令即可升级到最新版（脚本会下载最新发行包并覆盖旧二进制）：
+
+```bash
+curl -fsSL https://github.com/labyte/hr-compose/releases/latest/download/install.sh | sh
+```
+
+- **指定版本更新**：`HR_COMPOSE_VERSION=v1.0.0 curl -fsSL ... | sh`
+- **离线更新**：按上面离线安装的方式，重新下载新版本 tarball 覆盖旧二进制即可
+- 更新工具**不会**改动已有的 systemd unit 和运行中的服务；若新版生成的 unit 内容有变，重新执行一次 `sudo hr-compose up`（幂等）即可让配置生效
+
+### 卸载
+
+```bash
+sudo hr-compose down          # 1. 停止并清理所有托管服务（只删带托管标记的 unit）
+sudo rm /usr/local/bin/hr-compose   # 2. 删除二进制（若装了自定义目录，删对应文件）
+```
+
+> `hr-compose down` 只删除由 hr-compose 生成（带 `# MANAGED BY hr-compose` 标记）的 unit 文件，不会误删同名系统服务。若服务名与系统已有 unit 重名，`down` 会拒绝删除并报错。
+
 ---
 
 ## 快速开始
 
-在项目目录写一份 `hr-compose.yml`：
+在项目目录写一份 `hr-compose.yml`（也可以先 `hr-compose init` 生成模板再编辑）：
 
 ```yaml
 services:
@@ -107,10 +128,11 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 
 | 命令 | 说明 | 示例 |
 | --- | --- | --- |
+| `init` | 生成默认 `hr-compose.yml` 模板（已存在则不覆盖） | `hr-compose init` |
 | `up` | 生成 unit 并启动全部服务，遵循 `depends_on` 顺序；重复执行幂等 | `sudo hr-compose up` |
 | `down` | 停止并清理全部服务，删除 unit 文件 | `sudo hr-compose down` |
 | `restart [name]` | 重启指定服务，不指定则全部 | `sudo hr-compose restart api` |
-| `ps` | 列出 yml 中各服务状态（ACTIVE / SUB / PID / MEMORY） | `hr-compose ps` |
+| `ps` | 列出 yml 中各服务状态（ACTIVE / SUB / PID / MEMORY），终端下状态彩色显示（active 绿 / failed 红 / activating 黄） | `hr-compose ps` |
 | `logs [name] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发 | `hr-compose logs api -f` |
 | `config` | 校验 yml 并打印生成的 unit 内容（调试用） | `hr-compose config` |
 
@@ -194,6 +216,7 @@ services:
 - **`std_output: null` 必须加引号**：不加引号是 YAML 的 `null` 字面量，等价于"未配置"，会被当作默认 `journal`。
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize，否则 systemd 会认为服务未启动。
 - **无 project 概念**：工具只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统上其他 unit。
+- **ps 彩色输出**：终端下状态自动着色，管道/重定向自动无色；设 `NO_COLOR=1` 可强制关闭。
 
 ---
 

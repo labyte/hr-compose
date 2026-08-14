@@ -1,4 +1,4 @@
-module github.com/labyte/hr-compose
+module hr.compose
 
 go 1.22
 

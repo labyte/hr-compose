@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/labyte/hr-compose/internal/config"
-	"github.com/labyte/hr-compose/internal/systemctl"
-	"github.com/labyte/hr-compose/internal/unit"
+	"hr.compose/internal/config"
+	"hr.compose/internal/systemctl"
+	"hr.compose/internal/unit"
 )
 
 // UnitDir 是 systemd 单元文件目录。用变量而非常量，便于测试覆盖。

@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/labyte/hr-compose/internal/config"
+	"hr.compose/internal/config"
 )
 
 // Logs 按服务 std_output 分发查看命令：

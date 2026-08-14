@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/labyte/hr-compose/internal/config"
+	"hr.compose/internal/config"
 )
 
 // ManagedMark 是 unit 文件的托管标记，down 删除前用于校验归属，防止误删同名系统服务。

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -24,5 +25,19 @@ func TestRootHelp(t *testing.T) {
 	os.Args = []string{"hr-compose", "--help"}
 	if err := Execute("test"); err != nil {
 		t.Fatalf("Execute(--help): %v", err)
+	}
+}
+
+// TestInitCommand 冒烟：init 生成默认编排文件，且不覆盖已有文件。
+func TestInitCommand(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "hr-compose.yml")
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+	os.Args = []string{"hr-compose", "init", "--file", p}
+	if err := Execute("test"); err != nil {
+		t.Fatalf("Execute(init): %v", err)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("init 后应生成 %s: %v", p, err)
 	}
 }
