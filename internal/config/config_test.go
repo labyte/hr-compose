@@ -158,3 +158,27 @@ services:
 		t.Errorf("EffectiveDescription = %q, want 默认值", got)
 	}
 }
+
+func TestRejectNewlineInCommand(t *testing.T) {
+	p := writeFixture(t, `
+services:
+  api:
+    command: "/bin/true\nExecStart=/bin/evil"
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("command 含换行应被拒绝（unit 注入）")
+	}
+}
+
+func TestRejectNewlineInEnvironment(t *testing.T) {
+	p := writeFixture(t, `
+services:
+  api:
+    command: /opt/myapp/api
+    environment:
+      - "FOO=1\nExecStart=/bin/evil"
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("environment 含换行应被拒绝（unit 注入）")
+	}
+}

@@ -86,6 +86,14 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(svc.Command) == "" {
 			return fmt.Errorf("服务 %q 缺少必填字段 command", name)
 		}
+		if err := validateNoNewline(name, "command", svc.Command); err != nil {
+			return err
+		}
+		for _, env := range svc.Environment {
+			if err := validateNoNewline(name, "environment", env); err != nil {
+				return err
+			}
+		}
 		for _, dep := range svc.DependsOn {
 			if _, ok := c.Services[dep]; !ok {
 				return fmt.Errorf("服务 %q 的 depends_on 引用了未定义的服务 %q", name, dep)
@@ -101,6 +109,14 @@ func validateServiceName(name string) error {
 		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
 			return fmt.Errorf("服务名 %q 只能包含小写字母、数字、-、_", name)
 		}
+	}
+	return nil
+}
+
+// validateNoNewline 校验写入 unit 指令的值不含换行，防止向 systemd unit 文件注入额外指令。
+func validateNoNewline(name, field, v string) error {
+	if strings.ContainsAny(v, "\n\r") {
+		return fmt.Errorf("服务 %q 的 %s 不能包含换行符", name, field)
 	}
 	return nil
 }
