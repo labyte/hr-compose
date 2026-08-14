@@ -3,7 +3,7 @@ GO      ?= go
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
-.PHONY: all build test vet lint fmt install cross clean
+.PHONY: all build test test-race test-cover vet lint fmt install cross clean
 
 all: build
 
@@ -15,6 +15,9 @@ test:
 
 test-race:
 	$(GO) test -race ./...
+
+test-cover:
+	$(GO) test -cover ./...
 
 vet:
 	$(GO) vet ./...

@@ -19,7 +19,7 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test -race ./...
+        run: go test -race -cover ./...
 
       - name: Lint
         uses: golangci/golangci-lint-action@v6
@@ -28,3 +28,19 @@ jobs:
 
       - name: Cross-compile
         run: make cross
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build
+        run: make build
+
+      - name: E2E smoke (systemd)
+        run: bash e2e/smoke.sh "$GITHUB_WORKSPACE/bin/hr-compose"

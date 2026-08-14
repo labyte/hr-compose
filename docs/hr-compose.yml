@@ -12,12 +12,12 @@ services:
     environment:                       # Environment=，每行一条
       - "DB_ADDR=127.0.0.1:3306"
       - "LOG_LEVEL=info"
-    restart: on-failure                # Restart
-    restart_sec: 5                     # RestartSec
+    restart: on-failure                # Restart，取值：no / on-success / on-failure / on-abnormal / on-abort / on-watchdog / always
+    restart_sec: 5                     # RestartSec，重启间隔（秒）
     stop_timeout: 30                   # TimeoutStopSec，优雅停止宽限期（秒）
-    memory_max: 2G                     # MemoryMax
-    cpu_quota: 200%                    # CPUQuota
-    std_output: journal                # StandardOutput/StandardError：journal 默认
+    memory_max: 2G                     # MemoryMax，大小带单位：2G / 500M / 1024K
+    cpu_quota: 200%                    # CPUQuota，百分比：100% = 1 核，200% = 2 核
+    std_output: journal                # StandardOutput/StandardError，取值：journal（默认）/ "null" / file:<path> / append:<path>
     depends_on:                        # After= + Wants=，仅控制启动顺序
       - redis
 

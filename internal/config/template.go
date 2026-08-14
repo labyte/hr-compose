@@ -15,12 +15,12 @@ const defaultTemplate = `# hr-compose.yml
 #   working_dir   工作目录
 #   user / group  运行身份 / 运行组
 #   environment   环境变量，每行一条 "KEY=VALUE"
-#   restart       no / on-success / on-failure / always
+#   restart       no / on-success / on-failure / on-abnormal / on-abort / on-watchdog / always
 #   restart_sec   重启间隔（秒）
-#   stop_signal   停止信号（默认 SIGTERM）
+#   stop_signal   停止信号：SIGTERM（默认）/ SIGKILL / SIGINT / SIGHUP 等
 #   stop_timeout  停止宽限期（秒，默认 90）
-#   memory_max    内存上限，如 2G
-#   cpu_quota     CPU 配额，如 200%
+#   memory_max    内存上限，大小带单位：2G / 500M / 1024K
+#   cpu_quota     CPU 配额，百分比：100% = 1 核 / 200% = 2 核
 #   std_output    journal（默认）/ "null" / file:<path> / append:<path>
 #   log_file      std_output 为 "null" 时的外部日志路径（仅 logs 提示用）
 #   depends_on    启动顺序依赖（仅控制顺序，不阻塞失败）

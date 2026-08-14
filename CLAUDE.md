@@ -31,7 +31,7 @@ make cross        # 交叉编译 linux/amd64 + linux/arm64 + darwin/arm64
 
 - 跑单个测试：`go test ./internal/engine -run TestOrderDependsFirst -v`
 - CI（`.github/workflows/ci.yml`）依次跑：`go vet ./...` → `go test -race ./...` → golangci-lint → `make cross`。
-- `e2e/` 是端到端测试，需要真实 Linux + systemd + root 权限，**默认不执行**，单测环境跑不了。
+- `e2e/smoke.sh` 是端到端冒烟（真实 systemd + root，单测环境跑不了），已接入 CI 的 e2e job（ubuntu runner 以 sudo 执行 up/ps/stop/start/down）；本地 Linux 可 `bash e2e/smoke.sh` 直接跑。
 
 ## 架构与数据流
 
@@ -48,7 +48,7 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 - **`internal/config`**：`Service` 结构体字段名即 yaml 字段名（`working_dir`、`stop_timeout` 等）。字段值**直接透传给对应 systemd 指令，不做 compose 语义翻译**，取值以 systemd 为准。校验：services 非空、`command` 必填、`depends_on` 只能引用已定义服务、服务名字符集限小写字母/数字/`-`/`_`（服务名会拼成 unit 文件名）。
 - **`internal/unit`**：`Generate()` 把配置渲染成 unit 文本。头部写入 `# MANAGED BY hr-compose` 标记（`unit.ManagedMark`）+ 内容 hash。字段 → systemd 指令的映射关系：`description`→`Description`（空值经 `Service.EffectiveDescription` 回退为 `hr-compose service <name>`）、`command`→`ExecStart`、`working_dir`→`WorkingDirectory`、`restart_sec`→`RestartSec`、`stop_signal`→`KillSignal`、`stop_timeout`→`TimeoutStopSec`、`memory_max`→`MemoryMax`、`cpu_quota`→`CPUQuota`、`environment`→每行 `Environment=`、`std_output`→`StandardOutput=`/`StandardError=`、`depends_on`→`After=`+`Wants=`。
 - **`internal/engine`**：`order()` 对 `depends_on` 做拓扑排序（依赖者在前，排序后按名字稳定输出）；`up` 按序写 unit→daemon-reload→enable→start，用 `writeIfManaged` 保证幂等并拒绝覆盖非托管同名 unit；`down` 逆序 stop→disable→删文件（`removeIfManaged` 只删托管文件）。cli 层 `up` 命令在成功后再调 `e.Ps()` 展示服务状态。
-- **`internal/systemctl`**：`Client` 是接口（`Enable/Disable/Start/Stop/Restart/DaemonReload/Show`），`Real` 是真实实现；`Show` 用 `systemctl show` 文本输出解析成 map（兼容老 systemd，不依赖 JSON）。
+- **`internal/systemctl`**：`Client` 是接口（`Enable/Disable/Start/Stop/Restart/DaemonReload/Show/ShowMany`），`Real` 是真实实现；`Show` 用 `systemctl show` 文本输出解析成 map（兼容老 systemd，不依赖 JSON）；`ShowMany` 一次批量查询多个 unit（`-p` 只取 ps 需要的属性），部分 unit 未加载时解析可用块、完全不可用才报错，ps 对批量缺失的 unit 回退逐服务 `Show`。
 
 ### 通用流程（各命令共享的不变式）
 

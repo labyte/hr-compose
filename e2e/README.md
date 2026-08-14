@@ -31,4 +31,8 @@ ls /etc/systemd/system/api.service           # 应不存在
 
 ## CI
 
-GitHub Actions 的 ubuntu runner 自带 systemd，可在此目录加一个 e2e job（`sudo systemctl` 场景需要 `--privileged` 或直接以 root 跑，暂缓接入主 CI）。
+`e2e/smoke.sh` 已接入 GitHub Actions 主 CI（ubuntu runner 自带 systemd，以 `sudo` 运行真实启停冒烟）。本地 Linux 也可直接执行：
+
+```bash
+bash e2e/smoke.sh
+```

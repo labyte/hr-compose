@@ -176,13 +176,13 @@ services:
     environment:                       # Environment=，每行一条
       - "DB_ADDR=127.0.0.1:3306"
       - "LOG_LEVEL=info"
-    restart: on-failure                # Restart
-    restart_sec: 5                     # RestartSec
-    stop_signal: SIGTERM               # KillSignal
+    restart: on-failure                # Restart，取值：no / on-success / on-failure / on-abnormal / on-abort / on-watchdog / always
+    restart_sec: 5                     # RestartSec，重启间隔（秒）
+    stop_signal: SIGTERM               # KillSignal，取值：SIGTERM（默认）/ SIGKILL / SIGINT / SIGHUP 等
     stop_timeout: 30                   # TimeoutStopSec，优雅停止宽限期（秒）
-    memory_max: 2G                     # MemoryMax
-    cpu_quota: 200%                    # CPUQuota
-    std_output: journal                # StandardOutput/StandardError
+    memory_max: 2G                     # MemoryMax，大小带单位：2G / 500M / 1024K
+    cpu_quota: 200%                    # CPUQuota，百分比：100% = 1 核，200% = 2 核
+    std_output: journal                # StandardOutput/StandardError，取值：journal（默认）/ "null" / file:<path> / append:<path>
     depends_on:                        # After= + Wants=，仅控制启动顺序
       - redis
   redis:
@@ -205,12 +205,12 @@ services:
 | `working_dir` | 工作目录 | `WorkingDirectory` |
 | `user` / `group` | 运行身份 / 运行组 | `User` / `Group` |
 | `environment` | 环境变量，每行一条 | `Environment=` |
-| `restart` | 重启策略（no / on-success / on-failure / always 等） | `Restart` |
+| `restart` | 重启策略，取值：no / on-success / on-failure / on-abnormal / on-abort / on-watchdog / always | `Restart` |
 | `restart_sec` | 重启间隔秒数 | `RestartSec` |
-| `stop_signal` | 停止信号（默认 SIGTERM） | `KillSignal` |
+| `stop_signal` | 停止信号，取值：SIGTERM（默认）/ SIGKILL / SIGINT / SIGHUP / SIGQUIT / SIGUSR1 / SIGUSR2 等 | `KillSignal` |
 | `stop_timeout` | 停止宽限期秒数（默认 90） | `TimeoutStopSec` |
-| `memory_max` | 内存上限 | `MemoryMax` |
-| `cpu_quota` | CPU 配额 | `CPUQuota` |
+| `memory_max` | 内存上限，大小带单位（2G / 500M / 1024K） | `MemoryMax` |
+| `cpu_quota` | CPU 配额，百分比（100% = 1 核，200% = 2 核） | `CPUQuota` |
 | `std_output` | 日志目标（journal / `"null"` / file:`<path>` / append:`<path>`） | `StandardOutput=`、`StandardError=` |
 | `log_file` | 外部日志文件路径，仅用于 `logs` 提示 | —（不参与 systemd 配置） |
 | `depends_on` | 依赖的服务，仅控制启动顺序 | `After=` + `Wants=` |
@@ -248,3 +248,9 @@ hr-compose config            # 校验 yml、预览生成的 unit 内容
 systemctl status <svc>.service   # 查看 systemd 层面的真实状态
 journalctl -u <svc>.service      # 查看 journal 日志
 ```
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 labyte
