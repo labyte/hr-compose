@@ -10,9 +10,9 @@ import (
 )
 
 // Logs 按服务 std_output 分发查看命令：
-//   - journal    → 执行 journalctl
-//   - file:<p> / append:<p> → 提示用 tail -f 查看
-//   - null       → 提示用 tail 查看业务日志
+//   - journal            → 执行 journalctl
+//   - file:<p>/append:<p> → 执行 tail 查看对应日志文件
+//   - null               → 提示用 tail 查看业务日志
 func (e *Engine) Logs(name string, follow bool) error {
 	names, err := e.resolve(name)
 	if err != nil {
@@ -42,20 +42,28 @@ func dispatchLogs(name string, svc *config.Service, follow bool) error {
 		}
 		return nil
 	case strings.HasPrefix(out, "file:"):
-		return hintTail(name, strings.TrimPrefix(out, "file:"))
+		return runLogFile(name, strings.TrimPrefix(out, "file:"), follow)
 	case strings.HasPrefix(out, "append:"):
-		return hintTail(name, strings.TrimPrefix(out, "append:"))
+		return runLogFile(name, strings.TrimPrefix(out, "append:"), follow)
 	default:
 		return fmt.Errorf("服务 %s 不支持的 std_output: %q", name, out)
 	}
 }
 
-func hintTail(name, path string) error {
-	fmt.Printf("服务 %s 日志写入 %s，请使用：tail -f %s\n", name, path, path)
-	return nil
+// runLogFile 对 file:/append: 模式执行 tail 查看日志文件；文件暂不存在时给提示。
+func runLogFile(name, path string, follow bool) error {
+	if _, err := os.Stat(path); err != nil {
+		fmt.Printf("服务 %s 日志文件 %s 暂不存在（服务可能尚未写入），请稍后重试：tail -f %s\n", name, path, path)
+		return nil
+	}
+	args := []string{"-n", "100", path}
+	if follow {
+		args = []string{"-f", path}
+	}
+	return runInteractive("tail", args...)
 }
 
-// runInteractive 以继承标准输入输出方式执行外部命令（journalctl）。
+// runInteractive 以继承标准输入输出方式执行外部命令（journalctl / tail）。
 func runInteractive(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Stdin = os.Stdin

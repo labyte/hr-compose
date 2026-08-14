@@ -16,6 +16,7 @@ type Client interface {
 	Restart(unit string) error
 	DaemonReload() error
 	Show(unit string) (map[string]string, error)
+	ShowMany(units []string) (map[string]map[string]string, error)
 }
 
 // Real 是真实调用 systemctl 的实现。
@@ -45,6 +46,41 @@ func (c *Real) Show(unit string) (map[string]string, error) {
 		}
 	}
 	return fields, nil
+}
+
+// showProps 是 ps 需要的属性，ShowMany 用 -p 过滤以减少输出。
+var showProps = []string{"Id", "ActiveState", "SubState", "UnitFileState", "MainPID", "MemoryCurrent"}
+
+// ShowMany 一次调用 systemctl show 读取多个 unit 的状态，按 unit 名（Id 字段）索引。
+// 部分 unit 未加载时 systemctl 退出码非 0 但仍输出其余 unit 的块，此处解析可用部分；
+// 仅当 systemctl 完全不可用（无任何输出）时返回错误。
+func (c *Real) ShowMany(units []string) (map[string]map[string]string, error) {
+	if len(units) == 0 {
+		return map[string]map[string]string{}, nil
+	}
+	args := []string{"show", "--no-pager"}
+	for _, p := range showProps {
+		args = append(args, "-p", p)
+	}
+	args = append(args, units...)
+	out, err := exec.Command("systemctl", args...).Output()
+
+	result := make(map[string]map[string]string)
+	for _, block := range strings.Split(string(out), "\n\n") {
+		fields := make(map[string]string)
+		for _, line := range strings.Split(block, "\n") {
+			if k, v, ok := strings.Cut(line, "="); ok {
+				fields[k] = v
+			}
+		}
+		if id := fields["Id"]; id != "" {
+			result[id] = fields
+		}
+	}
+	if err != nil && len(result) == 0 {
+		return nil, err
+	}
+	return result, nil
 }
 
 func run(name string, args ...string) error {

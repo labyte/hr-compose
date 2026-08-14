@@ -25,13 +25,26 @@ func (f *fakeSys) DaemonReload() error {
 	return nil
 }
 func (f *fakeSys) Show(u string) (map[string]string, error) {
+	return fakeShowFields(), nil
+}
+
+func (f *fakeSys) ShowMany(units []string) (map[string]map[string]string, error) {
+	m := make(map[string]map[string]string, len(units))
+	for _, u := range units {
+		m[u] = fakeShowFields()
+	}
+	return m, nil
+}
+
+// fakeShowFields 返回 fake 固定的 systemctl show 字段。
+func fakeShowFields() map[string]string {
 	return map[string]string{
 		"ActiveState":   "active",
 		"SubState":      "running",
 		"UnitFileState": "enabled",
 		"MainPID":       "123",
 		"MemoryCurrent": "1048576",
-	}, nil
+	}
 }
 
 var _ systemctl.Client = (*fakeSys)(nil)

@@ -103,3 +103,37 @@ func TestPsColumns(t *testing.T) {
 		}
 	}
 }
+
+// partialFake 模拟批量查询缺失某 unit，但逐服务 Show 仍能查到（回退路径）。
+type partialFake struct {
+	*fakeSys
+}
+
+func (f *partialFake) ShowMany(units []string) (map[string]map[string]string, error) {
+	m := map[string]map[string]string{}
+	for _, u := range units {
+		if u != "redis.service" {
+			m[u] = fakeShowFields()
+		}
+	}
+	return m, nil
+}
+
+func TestPsFallbackPerUnitWhenMissingFromBatch(t *testing.T) {
+	oldOut, oldOverride := stdout, colorOverride
+	stdout = &bytes.Buffer{}
+	colorOverride = "never"
+	defer func() { stdout, colorOverride = oldOut, oldOverride }()
+
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api":   {Command: "/x/api"},
+		"redis": {Command: "/x/redis"},
+	}}
+	if err := New(cfg, &partialFake{&fakeSys{}}).Ps(); err != nil {
+		t.Fatal(err)
+	}
+	out := stdout.(*bytes.Buffer).String()
+	if !strings.Contains(out, "active") {
+		t.Errorf("redis 缺失于批量结果时应通过 Show 回退取到 active\n%s", out)
+	}
+}

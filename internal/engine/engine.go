@@ -29,7 +29,10 @@ func New(cfg *config.Config, sys systemctl.Client) *Engine {
 
 // Up 生成、enable 并按依赖顺序 start 全部服务。
 func (e *Engine) Up() error {
-	for _, name := range e.order() {
+	names := e.order()
+
+	// 第一趟：生成并写入全部 unit（幂等，仅在内容变化时重写），期间不 reload
+	for _, name := range names {
 		g, err := unit.Generate(name, e.cfg.Services[name])
 		if err != nil {
 			return err
@@ -37,7 +40,15 @@ func (e *Engine) Up() error {
 		if err := writeIfManaged(filepath.Join(UnitDir, g.UnitPath), g.Content); err != nil {
 			return err
 		}
-		if err := e.sys.DaemonReload(); err != nil {
+	}
+	// 所有 unit 就绪后统一 daemon-reload 一次（避免逐服务 reload）
+	if err := e.sys.DaemonReload(); err != nil {
+		return err
+	}
+	// 第二趟：按依赖顺序 enable + start
+	for _, name := range names {
+		g, err := unit.Generate(name, e.cfg.Services[name])
+		if err != nil {
 			return err
 		}
 		if err := e.sys.Enable(g.UnitPath); err != nil {
@@ -103,31 +114,54 @@ func removeIfManaged(path string) error {
 	return os.Remove(path)
 }
 
-// order 返回按 depends_on 拓扑排序的服务名（依赖者在前）。
+// order 返回按 depends_on 拓扑排序的服务名（依赖者在前）。迭代实现，避免深层依赖链栈溢出。
 func (e *Engine) order() []string {
-	var out []string
-	visited := make(map[string]bool)
-	stack := make(map[string]bool)
-	var visit func(string)
-	visit = func(name string) {
-		if visited[name] || stack[name] {
-			return
-		}
-		stack[name] = true
-		for _, dep := range e.cfg.Services[name].DependsOn {
-			visit(dep)
-		}
-		stack[name] = false
-		visited[name] = true
-		out = append(out, name)
-	}
 	names := make([]string, 0, len(e.cfg.Services))
 	for n := range e.cfg.Services {
 		names = append(names, n)
 	}
 	sort.Strings(names) // 稳定输出顺序
-	for _, n := range names {
-		visit(n)
+
+	var out []string
+	visited := make(map[string]bool)
+	inStack := make(map[string]bool)
+	for _, start := range names {
+		if visited[start] {
+			continue
+		}
+		stack := []string{start}
+		for len(stack) > 0 {
+			n := stack[len(stack)-1]
+			switch {
+			case visited[n]:
+				stack = stack[:len(stack)-1]
+			case inStack[n]:
+				// 依赖已全部处理完，完成该节点
+				inStack[n] = false
+				visited[n] = true
+				out = append(out, n)
+				stack = stack[:len(stack)-1]
+			default:
+				// 首次遇到：压入未处理依赖（逆序压栈保持与递归一致的遍历顺序）
+				inStack[n] = true
+				deps := e.cfg.Services[n].DependsOn
+				pushed := false
+				for i := len(deps) - 1; i >= 0; i-- {
+					d := deps[i]
+					if !visited[d] && !inStack[d] {
+						stack = append(stack, d)
+						pushed = true
+					}
+				}
+				if !pushed {
+					// 无未处理依赖，立即完成
+					inStack[n] = false
+					visited[n] = true
+					out = append(out, n)
+					stack = stack[:len(stack)-1]
+				}
+			}
+		}
 	}
 	return out
 }

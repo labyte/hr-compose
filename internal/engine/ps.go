@@ -26,11 +26,32 @@ func (e *Engine) Ps() error {
 	})
 	t.SetStyle(table.StyleLight)
 
+	names := e.order()
+	unitNames := make([]string, len(names))
+	for i, n := range names {
+		unitNames[i] = n + ".service"
+	}
+	// 一次批量查询所有 unit，减少进程启动
+	all, err := e.sys.ShowMany(unitNames)
+	if err != nil {
+		all = map[string]map[string]string{}
+	}
+	// 批量结果中缺失的 unit（未加载）回退逐服务查询
+	for _, n := range names {
+		u := n + ".service"
+		if _, ok := all[u]; ok {
+			continue
+		}
+		if f, serr := e.sys.Show(u); serr == nil {
+			all[u] = f
+		}
+	}
+
 	on := colorsOn()
-	for _, name := range e.order() {
+	for _, name := range names {
 		svc := e.cfg.Services[name]
-		fields, err := e.sys.Show(name + ".service")
-		if err != nil {
+		fields, ok := all[name+".service"]
+		if !ok {
 			// unit 未加载（未启动过或已 down）时按空状态展示
 			t.AppendRow(table.Row{name, "-", "-", "-", "-", "-", valueOrDash(svc.Description)})
 			continue
