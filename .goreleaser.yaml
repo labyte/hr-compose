@@ -20,3 +20,9 @@ archives:
 
 checksum:
   name_template: checksums.txt
+
+# install.sh 作为发行资产一并发布，使 online 安装命令可用：
+#   curl -fsSL .../releases/latest/download/install.sh | sh
+release:
+  extra_files:
+    - glob: install.sh
