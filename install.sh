@@ -86,4 +86,13 @@ install -m 0755 hr-compose "$DEST_DIR/hr-compose" 2>/dev/null || {
 }
 
 echo "==> 已安装: $DEST_DIR/hr-compose"
-echo "==> 运行 hr-compose --help 查看命令帮助"
+
+# --- 自动安装命令补全（幂等；失败不中断安装）---
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+  # 经 sudo 安装时，补全写入真实用户的 shell 配置（而非 root）
+  sudo -Hu "$SUDO_USER" "$DEST_DIR/hr-compose" completion install 2>/dev/null || true
+else
+  "$DEST_DIR/hr-compose" completion install 2>/dev/null || true
+fi
+
+echo "==> 运行 hr-compose --help 查看命令帮助（新开终端后即可用 TAB 补全）"

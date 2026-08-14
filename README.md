@@ -132,7 +132,8 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | `up` | 生成 unit 并启动全部服务，遵循 `depends_on` 顺序；重复执行幂等，完成后自动展示各服务状态 | `sudo hr-compose up` |
 | `start [name]` | 启动已安装的服务（不重生成 unit），不指定则全部；需先 `up` 过 | `sudo hr-compose start` |
 | `stop [name]` | 停止服务（保留 unit 与 enable，不删除），不指定则全部 | `sudo hr-compose stop api` |
-| `down` | 停止并清理全部服务，删除 unit 文件 | `sudo hr-compose down` |
+| `down` | 停止并清理全部服务，删除 unit 文件；若有 journal 日志服务则清空系统 journal | `sudo hr-compose down` |
+| `clean [name]` | 清除服务日志（journal 清空 / file 截断），不指定则全部 | `sudo hr-compose clean api` |
 | `restart [name]` | 重启指定服务，不指定则全部 | `sudo hr-compose restart api` |
 | `enable [name]` | 设置服务开机启动（仅 enable，不启停），不指定则全部 | `sudo hr-compose enable api` |
 | `disable [name]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
@@ -225,12 +226,14 @@ services:
 | `append:<path>` | 追加写入 | 提示用 `tail -f <path>` 查看 |
 
 > `file:` / `append:` 的文件由 systemd 以 `User=` 身份打开，需保证目录对该用户可写；`file:` 会截断已有文件。
+>
+> **日志清理**：`down` 会清空系统 journal（若编排中存在 journal 服务）；`clean [name]` 可手动清除日志（journal 清空 / file 截断 / null 提示）。注意 journald 不支持按 unit 删除，清空的是**整个系统 journal**。
 
 ---
 
 ## 注意事项
 
-- **需要 root**：`up` / `down` / `start` / `stop` / `restart` 操作 systemd（`/etc/systemd/system`），需 `sudo`。`ps` / `logs` / `config` 为只读，普通用户即可。
+- **需要 root**：`up` / `down` / `start` / `stop` / `restart` / `clean` 操作 systemd（`/etc/systemd/system`）或日志，需 `sudo`。`ps` / `logs` / `config` 为只读，普通用户即可。
 - **`stop` 与 `down` 的区别**：`stop` 只停进程，保留 unit 文件与 enable 状态（可随时 `start` 恢复）；`down` 会删除 unit 并 disable（下次要 `up` 重建）。临时停服用 `stop`。
 - **服务名即 unit 文件名**：服务名只用小写字母、数字、`-`、`_`；避免与系统已有 unit 同名冲突。
 - **删除/覆盖保护**：unit 文件头部有 `# MANAGED BY hr-compose` 标记；`down` 只删除带该标记的文件，`up` 也不会覆盖非该标记的同名 unit——防止误删/误覆盖同名系统服务。如确需让 hr-compose 托管某个同名 unit，先删除原文件再 `up`。

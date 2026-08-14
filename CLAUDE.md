@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 hr-compose 是一个对标简化版 docker-compose 的 Go CLI：读取 `hr-compose.yml` 编排文件，在 Linux 裸机上基于 **systemd** 管理多个自研业务服务的启停与编排。核心设计原则是**复用 systemd，不重复造轮子**——进程监控、自启、重启、日志全交给 systemd，CLI 只做编排解析、unit 生成与 systemctl/journalctl 封装，保持薄。
 
-命令：`init` / `up` / `start` / `stop` / `restart [name]` / `enable` / `disable` / `down` / `ps` / `logs [name] [-f]` / `config [name]`。无 project 概念，只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统其他 unit。
+命令：`init` / `up` / `start` / `stop` / `restart [name]` / `enable` / `disable` / `down` / `clean [name]` / `ps` / `logs [name] [-f]` / `config [name]`。无 project 概念，只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统其他 unit。
 
 ## 设计原则（改动时须遵循）
 
@@ -59,7 +59,7 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 
 ## 规划中的功能（勿与既有实现冲突）
 
-来自迭代路线，尚未实现：`.env` 环境变量替换、日志磁盘空间保护（journald drop-in 限额、logrotate `copytruncate`）、目录隔离（多目录同服务名自动加前缀）、`scale` 多实例、校验 command 路径存在、命令/路径/服务名补全。设计这些功能时注意：`std_output` 语义、`ManagedMark` 删除保护、服务名即 unit 文件名的约束都已有测试覆盖。
+来自迭代路线，尚未实现：`.env` 环境变量替换、日志磁盘空间保护（journald drop-in 限额、logrotate `copytruncate`）、目录隔离（多目录同服务名自动加前缀）、`scale` 多实例、校验 command 路径存在。设计这些功能时注意：`std_output` 语义、`ManagedMark` 删除保护、服务名即 unit 文件名的约束都已有测试覆盖。
 
 ## 关键安全约束（改动时勿破坏）
 
@@ -74,7 +74,8 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize。
 - **`ps` 的行为**：遍历 yml 中定义的服务逐个 `systemctl show`；unit 未加载时输出 `-` 空状态，不报错。
 - **`ps` 用 go-pretty 渲染**：`text/tabwriter` 或手动定宽会把 ANSI 转义码计入列宽导致错位，改用 `github.com/jedib0t/go-pretty/v6`（会剥离 ANSI 计算可见宽度，可安全把 `text.Colors.Sprint` 生成的彩色字符串直接作为单元格）。列：NAME / ACTIVE / SUB / ENABLED（`UnitFileState` 是否开机启动）/ PID / MEMORY / DESCRIPTION；状态列用 `stateColors` 着色、`formatBytes` 格式化内存、`valueOrDash` 处理空值。勿改回 tabwriter 上色。
-- **`logs` 的分发**：按 `std_output` 值分流——`journal`（默认）执行 `journalctl -u <svc>.service`（`-f` 跟随）；`file:<p>` / `append:<p>` / `"null"` 只打印 `tail -f` 提示，不真正执行 tail。`log_file` 字段仅用于 null 模式的 tail 提示，不参与 systemd 配置。
+- **`logs` 的分发**：按 `std_output` 值分流——`journal`（默认）执行 `journalctl -u <svc>.service`（`-f` 跟随）；`file:<p>` / `append:<p>` 执行 `tail` 查看（文件不存在给提示）；`"null"` 只打印 `tail` 提示。`log_file` 字段仅用于 null 模式的 tail 提示，不参与 systemd 配置。
+- **journal 清理是全局的**：journald 不支持按 unit 删除日志，`down`（存在 journal 服务时）与 `clean [name]` 对 journal 服务执行 `journalctl --rotate` + `--vacuum-size=1`，清空**整个系统 journal**（非仅 hr-compose 服务的日志）。`clean` 对 `file:`/`append:` 服务截断对应文件、`null` 仅提示。
 
 ## 测试约定
 
