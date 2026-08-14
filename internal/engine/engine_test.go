@@ -24,6 +24,10 @@ func (f *fakeSys) DaemonReload() error {
 	f.actions = append(f.actions, "daemon-reload")
 	return nil
 }
+func (f *fakeSys) ClearJournal() error {
+	f.actions = append(f.actions, "clear-journal")
+	return nil
+}
 func (f *fakeSys) Show(u string) (map[string]string, error) {
 	return fakeShowFields(), nil
 }

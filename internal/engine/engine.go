@@ -63,6 +63,7 @@ func (e *Engine) Up() error {
 }
 
 // Down 逆序 stop、disable 并删除 unit 文件（仅删除带托管标记的文件）。
+// 若编排中存在使用 journal 日志的服务，清理整个 journal（journald 不支持按 unit 删除）。
 func (e *Engine) Down() error {
 	names := e.order()
 	for i := len(names) - 1; i >= 0; i-- {
@@ -75,7 +76,26 @@ func (e *Engine) Down() error {
 		}
 		fmt.Printf("down %s OK\n", name)
 	}
-	return e.sys.DaemonReload()
+	if err := e.sys.DaemonReload(); err != nil {
+		return err
+	}
+	if e.anyJournal() {
+		if err := e.sys.ClearJournal(); err != nil {
+			return fmt.Errorf("清理 journal 日志: %w", err)
+		}
+		fmt.Println("已清空系统 journal 日志")
+	}
+	return nil
+}
+
+// anyJournal 判断编排中是否存在使用 journal 日志输出的服务。
+func (e *Engine) anyJournal() bool {
+	for _, svc := range e.cfg.Services {
+		if svc.EffectiveStdOutput() == "journal" {
+			return true
+		}
+	}
+	return false
 }
 
 // writeIfManaged 只在目标不存在或是 hr-compose 托管文件时写入：

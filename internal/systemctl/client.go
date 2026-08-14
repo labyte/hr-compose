@@ -17,6 +17,7 @@ type Client interface {
 	DaemonReload() error
 	Show(unit string) (map[string]string, error)
 	ShowMany(units []string) (map[string]map[string]string, error)
+	ClearJournal() error
 }
 
 // Real 是真实调用 systemctl 的实现。
@@ -81,6 +82,15 @@ func (c *Real) ShowMany(units []string) (map[string]map[string]string, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+// ClearJournal 清空 journal 日志：先 rotate 封存当前文件，再按体积归零。
+// 注意：journald 不支持按 unit 删除，此处清空的是整个系统 journal。
+func (c *Real) ClearJournal() error {
+	if err := run("journalctl", "--rotate"); err != nil {
+		return err
+	}
+	return run("journalctl", "--vacuum-size=1")
 }
 
 func run(name string, args ...string) error {
