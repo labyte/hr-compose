@@ -41,20 +41,13 @@ func Generate(name string, svc *config.Service) (*Generated, error) {
 	if svc.WorkingDir != "" {
 		fmt.Fprintf(&b, "WorkingDirectory=%s\n", svc.WorkingDir)
 	}
-	if svc.User != "" {
-		fmt.Fprintf(&b, "User=%s\n", svc.User)
-	}
 	if svc.Group != "" {
 		fmt.Fprintf(&b, "Group=%s\n", svc.Group)
 	}
+	// user 未配置时自动注入执行 up 的真实用户（SUDO_USER / 当前用户）
+	fmt.Fprintf(&b, "User=%s\n", svc.EffectiveUser())
 	for _, env := range svc.Environment {
 		fmt.Fprintf(&b, "Environment=%s\n", env)
-	}
-	if svc.Restart != "" {
-		fmt.Fprintf(&b, "Restart=%s\n", svc.Restart)
-	}
-	if svc.RestartSec > 0 {
-		fmt.Fprintf(&b, "RestartSec=%d\n", svc.RestartSec)
 	}
 	if svc.StopSignal != "" {
 		fmt.Fprintf(&b, "KillSignal=%s\n", svc.StopSignal)
@@ -68,6 +61,9 @@ func Generate(name string, svc *config.Service) (*Generated, error) {
 	if svc.CPUQuota != "" {
 		fmt.Fprintf(&b, "CPUQuota=%s\n", svc.CPUQuota)
 	}
+	// restart / restart_sec / std_output 未配置时使用代码默认值（always / 5 / null）
+	fmt.Fprintf(&b, "Restart=%s\n", svc.EffectiveRestart())
+	fmt.Fprintf(&b, "RestartSec=%d\n", svc.EffectiveRestartSec())
 	out := svc.EffectiveStdOutput()
 	fmt.Fprintf(&b, "StandardOutput=%s\n", out)
 	fmt.Fprintf(&b, "StandardError=%s\n", out)

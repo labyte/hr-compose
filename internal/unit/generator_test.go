@@ -47,13 +47,62 @@ func TestGenerate(t *testing.T) {
 }
 
 func TestGenerateDefaultStdOutput(t *testing.T) {
+	// std_output 未配置时按默认 null（丢弃输出）写入。
 	svc := &config.Service{Command: "/opt/bin/x"}
 	g, err := Generate("x", svc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(g.Content, "StandardOutput=journal") {
-		t.Error("default std_output should be journal")
+	if !strings.Contains(g.Content, "StandardOutput=null") {
+		t.Errorf("default std_output 应写入 StandardOutput=null\n%s", g.Content)
+	}
+	if !strings.Contains(g.Content, "StandardError=null") {
+		t.Errorf("default std_output 应写入 StandardError=null\n%s", g.Content)
+	}
+}
+
+func TestGenerateDefaultRestart(t *testing.T) {
+	// restart / restart_sec 未配置时写入默认 always / 5。
+	svc := &config.Service{Command: "/opt/bin/x"}
+	g, err := Generate("x", svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(g.Content, "Restart=always") {
+		t.Errorf("default restart 应写入 Restart=always\n%s", g.Content)
+	}
+	if !strings.Contains(g.Content, "RestartSec=5") {
+		t.Errorf("default restart_sec 应写入 RestartSec=5\n%s", g.Content)
+	}
+}
+
+func TestGenerateDefaultUser(t *testing.T) {
+	// user 未配置时注入 User=（执行 up 的真实用户），不产生空 User=。
+	svc := &config.Service{Command: "/opt/bin/x"}
+	g, err := Generate("x", svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(g.Content, "User=") {
+		t.Errorf("default user 应写入 User=\n%s", g.Content)
+	}
+}
+
+func TestGenerateNoneStdOutput(t *testing.T) {
+	// std_output: none 别名应归一为 null，写入 StandardOutput/StandardError=null。
+	svc := &config.Service{Command: "/opt/bin/x", StdOutput: "none"}
+	g, err := Generate("x", svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(g.Content, "StandardOutput=null") {
+		t.Errorf("std_output=none 应写入 StandardOutput=null\n%s", g.Content)
+	}
+	if !strings.Contains(g.Content, "StandardError=null") {
+		t.Errorf("std_output=none 应写入 StandardError=null\n%s", g.Content)
+	}
+	if strings.Contains(g.Content, "StandardOutput=none") {
+		t.Errorf("unit 中不应出现原始值 none\n%s", g.Content)
 	}
 }
 

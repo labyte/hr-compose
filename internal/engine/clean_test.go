@@ -11,7 +11,7 @@ import (
 func TestDownClearsJournalForJournalService(t *testing.T) {
 	fake := &fakeSys{}
 	cfg := &config.Config{Services: map[string]*config.Service{
-		"api": {Command: "/x/api"}, // 默认 std_output=journal
+		"api": {Command: "/x/api", StdOutput: "journal"}, // 默认已是 null，需显式 journal 才清理
 	}}
 	if err := New(cfg, fake).Down(); err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestDownSkipsJournalWhenNoJournalService(t *testing.T) {
 func TestClearLogsJournal(t *testing.T) {
 	fake := &fakeSys{}
 	cfg := &config.Config{Services: map[string]*config.Service{
-		"api": {Command: "/x/api"},
+		"api": {Command: "/x/api", StdOutput: "journal"},
 	}}
 	if err := New(cfg, fake).ClearLogs("api"); err != nil {
 		t.Fatal(err)

@@ -1,0 +1,9 @@
+# hr-compose.yml 最小化示例
+# user 省略时自动注入"执行 up 的真实用户"（sudo 下取 SUDO_USER）。
+# restart / restart_sec / std_output 未配置时使用代码默认值：always / 5 / null（丢弃输出）。
+# 完整字段说明见项目根目录 README「编排文件参考」。
+services:
+  app:
+    description: 应用服务                # Description，服务描述
+    command: /opt/myapp/app            # ExecStart，启动命令（必填，必须前台运行）
+    working_dir: /opt/myapp            # WorkingDirectory，工作目录

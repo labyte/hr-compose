@@ -66,6 +66,8 @@ hr-compose --help
 
 > 平台对应：`uname -m` 输出 `x86_64` → `amd64`，`aarch64` / `arm64` → `arm64`；macOS 本地用 `hr-compose_1.0.0_darwin_arm64.tar.gz`。也可在 [Releases 页面](https://github.com/labyte/hr-compose/releases) 直接下载对应平台压缩包。
 
+> 完整离线流程（含校验、安装、使用、更新卸载）见 [docs/offline-install.md](docs/offline-install.md)。
+
 ### 更新
 
 重新执行在线安装命令即可升级到最新版（脚本会下载最新发行包并覆盖旧二进制）：
@@ -99,7 +101,7 @@ services:
     command: /opt/redis/redis-server /opt/redis/redis.conf
     user: appuser
     restart: always
-    std_output: "null"                 # 丢弃 stdout/stderr，redis 自己写日志
+    std_output: null                   # 丢弃 stdout/stderr（裸写 null 即可），redis 自己写日志
     log_file: /var/log/redis/redis.log
   api:
     command: /opt/myapp/api            # 必须前台运行，不要 daemon
@@ -107,6 +109,7 @@ services:
     user: appuser
     environment:
       - "DB_ADDR=127.0.0.1:3306"
+    # std_output 未配置，默认 null（丢弃输出，日志由业务程序自管）；要 journald 需显式 std_output: journal
     depends_on:                        # 启动顺序：先 redis 后 api
       - redis
 ```
@@ -116,7 +119,7 @@ services:
 ```bash
 sudo hr-compose up          # 生成 unit、enable + start，按依赖顺序启动
 hr-compose ps               # 查看服务状态
-hr-compose logs api         # 查看日志（journal 模式走 journalctl）
+hr-compose logs api         # 查看日志（api 未配 std_output，默认 null → 提示 tail 业务日志）
 hr-compose logs redis       # 提示 tail 查看 redis 自己的日志文件
 sudo hr-compose restart api # 重启某个服务
 sudo hr-compose down        # 停止并清理（删除 unit 文件）
@@ -163,6 +166,29 @@ MEMORY 列为 systemd 报告的内存字节数，自动格式化为 `K / M / G` 
 
 默认读取当前目录的 `hr-compose.yml`。
 
+### 最小配置示例
+
+只写 描述 / 启动命令 / 工作目录 三个字段即可，其余走代码默认值：
+
+```yaml
+services:
+  app:
+    description: 应用服务              # Description，服务描述
+    command: /opt/myapp/app          # ExecStart，启动命令（必填，必须前台运行）
+    working_dir: /opt/myapp          # WorkingDirectory，工作目录
+```
+
+未配置字段的默认行为：
+
+| 未配置字段 | 默认行为 |
+| --- | --- |
+| `user` | 以执行 `up` 的真实用户运行（sudo 下取 `SUDO_USER`） |
+| `restart` | `always`，进程退出自动重启 |
+| `restart_sec` | `5`，重启间隔 5 秒 |
+| `std_output` | `null`，丢弃 stdout/stderr，日志由业务程序自行管理 |
+
+需要指定用户、调整重启策略或让日志进 journald 时，再显式配置对应字段（完整字段见下）。
+
 ### 完整示例
 
 ```yaml
@@ -183,7 +209,7 @@ services:
     stop_timeout: 30                   # TimeoutStopSec，优雅停止宽限期（秒）
     memory_max: 2G                     # MemoryMax，大小带单位：2G / 500M / 1024K
     cpu_quota: 200%                    # CPUQuota，百分比：100% = 1 核，200% = 2 核
-    std_output: journal                # StandardOutput/StandardError，取值：journal（默认）/ "null" / file:<path> / append:<path>
+    std_output: journal                # StandardOutput/StandardError，取值：null（默认，裸写即可）/ none（兼容旧写法）/ journal / file:<path> / append:<path>
     depends_on:                        # After= + Wants=，仅控制启动顺序
       - redis
   redis:
@@ -191,37 +217,38 @@ services:
     working_dir: /opt/redis
     user: appuser
     restart: always
-    std_output: "null"                 # 丢弃 stdout/stderr（null 需加引号）
+    std_output: null                   # 丢弃 stdout/stderr（裸写 null 即可）
     log_file: /var/log/redis/redis.log # 仅用于 logs 命令的 tail 提示
 ```
 
 ### 字段说明
 
-> 所有字段值直接透传给对应 systemd 指令，**不做 compose 语义翻译**，取值以 systemd 为准。
+> 所有字段值直接透传给对应 systemd 指令，**不做 compose 语义翻译**，取值以 systemd 为准。`restart` / `restart_sec` / `std_output` 未配置时使用代码默认值（`always` / `5` / `null`）。
 
 | 字段 | 说明 | 写入的 systemd 指令 |
 | --- | --- | --- |
 | `description` | 服务描述（默认 `hr-compose service <name>`） | `Description` |
 | `command` | 启动命令（**必须前台运行，不要 daemon**，必填） | `ExecStart` |
 | `working_dir` | 工作目录 | `WorkingDirectory` |
-| `user` / `group` | 运行身份 / 运行组 | `User` / `Group` |
+| `user` / `group` | 运行身份 / 运行组（`user` 未配置默认注入执行 up 的真实用户） | `User` / `Group` |
 | `environment` | 环境变量，每行一条 | `Environment=` |
-| `restart` | 重启策略，取值：no / on-success / on-failure / on-abnormal / on-abort / on-watchdog / always | `Restart` |
-| `restart_sec` | 重启间隔秒数 | `RestartSec` |
+| `restart` | 重启策略，取值：no / on-success / on-failure / on-abnormal / on-abort / on-watchdog / always（未配置默认 always） | `Restart` |
+| `restart_sec` | 重启间隔秒数（默认 5） | `RestartSec` |
 | `stop_signal` | 停止信号，取值：SIGTERM（默认）/ SIGKILL / SIGINT / SIGHUP / SIGQUIT / SIGUSR1 / SIGUSR2 等 | `KillSignal` |
 | `stop_timeout` | 停止宽限期秒数（默认 90） | `TimeoutStopSec` |
 | `memory_max` | 内存上限，大小带单位（2G / 500M / 1024K） | `MemoryMax` |
 | `cpu_quota` | CPU 配额，百分比（100% = 1 核，200% = 2 核） | `CPUQuota` |
-| `std_output` | 日志目标（journal / `"null"` / file:`<path>` / append:`<path>`） | `StandardOutput=`、`StandardError=` |
-| `log_file` | 外部日志文件路径，仅用于 `logs` 提示 | —（不参与 systemd 配置） |
+| `std_output` | 日志目标（null 默认 / none 兼容 / journal / file:`<path>` / append:`<path>`） | `StandardOutput=`、`StandardError=` |
+| `log_file` | 外部日志文件路径（std_output 为 null 时 `logs` 提示用） | —（不参与 systemd 配置） |
 | `depends_on` | 依赖的服务，仅控制启动顺序 | `After=` + `Wants=` |
 
 ### 日志目标（std_output）
 
 | 取值 | 含义 | `hr-compose logs` 行为 |
 | --- | --- | --- |
-| `journal`（默认） | 写入 journald | 执行 `journalctl -u <svcname>.service [-f]` |
-| `"null"` | 丢弃 stdout/stderr，日志由业务程序自行写入外部文件。**YAML 里必须加引号** | 提示用 `tail -f` 查看外部日志文件（配合 `log_file`） |
+| `null`（默认） | 丢弃 stdout/stderr，日志由业务程序自行写入外部文件 | 提示用 `tail -f` 查看外部日志文件（配合 `log_file`） |
+| `none` | `null` 的兼容写法（旧版本推荐，语义相同） | 同上 |
+| `journal` | 写入 journald（非默认，需显式配置） | 执行 `journalctl -u <svcname>.service [-f]` |
 | `file:<path>` | 覆盖写入（截断原文件） | 提示用 `tail -f <path>` 查看 |
 | `append:<path>` | 追加写入 | 提示用 `tail -f <path>` 查看 |
 
@@ -237,7 +264,7 @@ services:
 - **`stop` 与 `down` 的区别**：`stop` 只停进程，保留 unit 文件与 enable 状态（可随时 `start` 恢复）；`down` 会删除 unit 并 disable（下次要 `up` 重建）。临时停服用 `stop`。
 - **服务名即 unit 文件名**：服务名只用小写字母、数字、`-`、`_`；避免与系统已有 unit 同名冲突。
 - **删除/覆盖保护**：unit 文件头部有 `# MANAGED BY hr-compose` 标记；`down` 只删除带该标记的文件，`up` 也不会覆盖非该标记的同名 unit——防止误删/误覆盖同名系统服务。如确需让 hr-compose 托管某个同名 unit，先删除原文件再 `up`。
-- **`std_output: null` 必须加引号**：不加引号是 YAML 的 `null` 字面量，等价于"未配置"，会被当作默认 `journal`。
+- **`std_output` 默认丢弃输出**：未配置时生成 `StandardOutput=null`，日志由业务程序自行管理；要进 journald 需显式 `std_output: journal`。丢弃输出直接裸写 `std_output: null` 即可（无需加引号）；`none` 为兼容旧写法。
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize，否则 systemd 会认为服务未启动。
 - **无 project 概念**：工具只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统上其他 unit。
 - **ps 彩色输出**：终端下状态自动着色，管道/重定向自动无色；设 `NO_COLOR=1` 可强制关闭。

@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -42,12 +43,55 @@ func (s *Service) EffectiveDescription(name string) string {
 	return s.Description
 }
 
-// EffectiveStdOutput 返回生效的 std_output 值，空值按 journal 处理。
-func (s *Service) EffectiveStdOutput() string {
-	if s.StdOutput == "" {
-		return "journal"
+// EffectiveRestart 返回生效的 restart 值，空值按 always（进程退出自动重启）处理。
+func (s *Service) EffectiveRestart() string {
+	if s.Restart == "" {
+		return "always"
 	}
-	return s.StdOutput
+	return s.Restart
+}
+
+// EffectiveRestartSec 返回生效的重启间隔秒数，0 按默认 5 秒处理。
+func (s *Service) EffectiveRestartSec() int {
+	if s.RestartSec == 0 {
+		return 5
+	}
+	return s.RestartSec
+}
+
+// EffectiveStdOutput 返回生效的 std_output 值：
+//   - 空值（未配置，或裸写 null 被 YAML 解析为空）→ 默认 null，丢弃 stdout/stderr
+//   - "none" → 兼容旧写法，同样归一为 null
+func (s *Service) EffectiveStdOutput() string {
+	switch s.StdOutput {
+	case "":
+		return "null"
+	case "none": // 兼容旧写法 none
+		return "null"
+	default:
+		return s.StdOutput
+	}
+}
+
+// userResolver 解析"执行 up 的真实用户"：SUDO_USER 优先（sudo 下进程是 root，取真实用户），
+// 否则取系统当前用户；均不可用时兜底 root（与 systemd 未设 User 的默认一致）。
+// 包级变量便于测试注入。
+var userResolver = func() string {
+	if sudo := os.Getenv("SUDO_USER"); sudo != "" {
+		return sudo
+	}
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	return "root"
+}
+
+// EffectiveUser 返回生效的 User 值：显式配置原样透传，空值自动注入执行 up 的真实用户。
+func (s *Service) EffectiveUser() string {
+	if s.User != "" {
+		return s.User
+	}
+	return userResolver()
 }
 
 // DefaultPath 返回默认编排文件路径（当前目录）。
