@@ -55,17 +55,21 @@ func TestFormatBytes(t *testing.T) {
 
 func TestMergedState(t *testing.T) {
 	cases := []struct{ active, sub, want string }{
-		{"active", "running", "active"},              // 运行中默认子状态，省略
-		{"active", "", "active"},                     // 空子状态
-		{"active", "exited", "active/exited"},        // oneshot 已完成，保留两级
-		{"active", "waiting", "active/waiting"},      // notify 等待
-		{"inactive", "dead", "inactive"},             // 停止默认子状态，省略
+		{"active", "running", "running"},             // 运行中
+		{"active", "", "active"},                     // 空子状态，回退主状态
+		{"active", "exited", "exited"},               // oneshot 已完成
+		{"active", "waiting", "waiting"},             // notify 未就绪
+		{"inactive", "dead", "stopped"},              // 已停止
 		{"failed", "failed", "failed"},               // 子状态与主状态相同，省略
-		{"activating", "start", "activating/start"},  // 启动中
+		{"failed", "", "failed"},                     // 空子状态
+		{"activating", "start", "starting"},          // 启动中
+		{"activating", "start-pre", "starting"},      // 启动中（前置步骤）
 		{"activating", "auto-restart", "restarting"}, // 自动重启中，单独表达
-		{"deactivating", "stop", "deactivating"},
-		{"deactivating", "stop-sigterm", "deactivating/stop-sigterm"},
-		{"reloading", "reload", "reloading"},
+		{"deactivating", "stop", "stopping"},         // 停止中
+		{"deactivating", "stop-sigterm", "stopping"}, // 内部细节不展示
+		{"reloading", "reload", "reloading"},         // 重载中
+		{"active", "degraded", "active/degraded"},    // 罕见组合回退两级
+		{"inactive", "exited", "inactive/exited"},    // 罕见组合回退两级
 	}
 	for _, tc := range cases {
 		if got := mergedState(tc.active, tc.sub); got != tc.want {
@@ -151,9 +155,9 @@ func TestPsColored(t *testing.T) {
 	defer func() { stdout, colorOverride = oldOut, oldOverride }()
 
 	out := runPs(t, map[string]*config.Service{"api": {Command: "/x/api"}})
-	want := text.Colors{text.FgGreen}.Sprint("active")
+	want := text.Colors{text.FgGreen}.Sprint("running")
 	if !strings.Contains(out, want) {
-		t.Errorf("active 状态应染绿（含 %q）\n%s", want, out)
+		t.Errorf("running 状态应染绿（含 %q）\n%s", want, out)
 	}
 }
 
@@ -182,7 +186,7 @@ func TestPsColumns(t *testing.T) {
 	})
 	for _, want := range []string{
 		"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME", "CONFIG", "DESCRIPTION",
-		"api", "active", "enabled", "1.0M", "50m", "/etc/systemd/system/api.service", "主业务 API",
+		"api", "running", "enabled", "1.0M", "50m", "/etc/systemd/system/api.service", "主业务 API",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("输出应包含 %q\n%s", want, out)
@@ -219,7 +223,7 @@ func TestPsFallbackPerUnitWhenMissingFromBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := stdout.(*bytes.Buffer).String()
-	if !strings.Contains(out, "active") {
-		t.Errorf("redis 缺失于批量结果时应通过 Show 回退取到 active\n%s", out)
+	if !strings.Contains(out, "running") {
+		t.Errorf("redis 缺失于批量结果时应通过 Show 回退取到 running\n%s", out)
 	}
 }

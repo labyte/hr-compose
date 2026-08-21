@@ -95,25 +95,33 @@ var runningStates = map[string]bool{
 	"active": true, "activating": true, "deactivating": true, "reloading": true,
 }
 
-// mergedState 把 ActiveState 与 SubState 合并为单列状态，语义保持等价：
-//   - 子状态为空或与主状态相同（如 failed/failed）时省略，只显示主状态
-//   - 主状态下的默认子状态冗余（active 的 running、inactive 的 dead、deactivating 的 stop、reloading 的 reload），省略
-//   - activating + auto-restart 是自动重启中，单独表达为 restarting（重点状态）
-//   - 其余组合以 "主/子" 两级展示，信息完整不丢失
+// mergedState 把 ActiveState 与 SubState 合并为单列状态，输出面向使用者的人话词汇：
+//   - 常见组合映射为单字：running（运行中）/ exited（oneshot 已完成）/ waiting（notify 未就绪）/
+//     stopped（已停止）/ starting（启动中）/ restarting（自动重启中）/ stopping（停止中）/ reloading（重载中）/ failed（失败）
+//   - activating 统一为 starting、deactivating 统一为 stopping（stop-sigterm 等内部细节不展示）；
+//     auto-restart 是自动重启中，单独表达为 restarting（重点状态）
+//   - 子状态为空或与主状态相同（如 failed/failed）时只显示主状态
+//   - 罕见组合回退 "主/子" 两级展示，信息不丢失
 func mergedState(active, sub string) string {
 	switch {
 	case sub == "" || sub == active:
 		return active
 	case active == "active" && sub == "running":
-		return active
+		return "running"
+	case active == "active" && sub == "exited":
+		return "exited"
+	case active == "active" && sub == "waiting":
+		return "waiting"
 	case active == "inactive" && sub == "dead":
-		return active
-	case active == "deactivating" && sub == "stop":
-		return active
-	case active == "reloading" && sub == "reload":
-		return active
+		return "stopped"
+	case active == "deactivating":
+		return "stopping"
+	case active == "reloading":
+		return "reloading"
 	case active == "activating" && sub == "auto-restart":
 		return "restarting"
+	case active == "activating":
+		return "starting"
 	}
 	return active + "/" + sub
 }

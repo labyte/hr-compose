@@ -31,7 +31,7 @@ sudo "$BIN" up
 test "$(systemctl is-active demo1.service)" = "active"
 test "$(systemctl is-active demo2.service)" = "active"
 "$BIN" ps | grep -q "demo1"
-"$BIN" ps | grep -q "active"
+"$BIN" ps | grep -q "running"
 
 echo "==> stop 保留 unit / start 恢复"
 sudo "$BIN" stop
