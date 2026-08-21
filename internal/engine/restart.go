@@ -9,7 +9,7 @@ func (e *Engine) Restart(name string) error {
 		return err
 	}
 	for _, n := range names {
-		if err := e.sys.Restart(n + ".service"); err != nil {
+		if err := e.sys.Restart(e.unitName(n)); err != nil {
 			return fmt.Errorf("重启 %s: %w", n, err)
 		}
 		fmt.Printf("restart %s OK\n", n)

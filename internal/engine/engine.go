@@ -27,13 +27,19 @@ func New(cfg *config.Config, sys systemctl.Client) *Engine {
 	return &Engine{cfg: cfg, sys: sys}
 }
 
+// unitName 返回服务对应的 unit 文件名：<project>-<service>.service；cfg.Name（name:）为空时不加前缀
+// （生产环境 Load 必填 name，空只出现在直接构造 Config 的测试里）。
+func (e *Engine) unitName(n string) string {
+	return unit.Name(e.cfg.Name, n)
+}
+
 // Up 生成、enable 并按依赖顺序 start 全部服务。
 func (e *Engine) Up() error {
 	names := e.order()
 
 	// 第一趟：生成并写入全部 unit（幂等，仅在内容变化时重写），期间不 reload
 	for _, name := range names {
-		g, err := unit.Generate(name, e.cfg.Services[name])
+		g, err := unit.Generate(name, e.cfg.Services[name], e.cfg.Name)
 		if err != nil {
 			return err
 		}
@@ -47,7 +53,7 @@ func (e *Engine) Up() error {
 	}
 	// 第二趟：按依赖顺序 enable + start
 	for _, name := range names {
-		g, err := unit.Generate(name, e.cfg.Services[name])
+		g, err := unit.Generate(name, e.cfg.Services[name], e.cfg.Name)
 		if err != nil {
 			return err
 		}
@@ -68,7 +74,7 @@ func (e *Engine) Down() error {
 	names := e.order()
 	for i := len(names) - 1; i >= 0; i-- {
 		name := names[i]
-		u := name + ".service"
+		u := e.unitName(name)
 		_ = e.sys.Stop(u)    // 未运行时报错可忽略
 		_ = e.sys.Disable(u) // 未 enable 时报错可忽略
 		if err := removeIfManaged(filepath.Join(UnitDir, u)); err != nil {

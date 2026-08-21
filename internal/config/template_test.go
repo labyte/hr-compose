@@ -18,7 +18,7 @@ func TestInitWritesTemplate(t *testing.T) {
 	}
 	content := string(b)
 	for _, want := range []string{
-		"version:", "services:", "api:", "web:", "command", "depends_on:", "示例",
+		"version:", "name:", "services:", "api:", "web:", "command", "depends_on:", "示例",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("模板缺少 %q\n%s", want, content)

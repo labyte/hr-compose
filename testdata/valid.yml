@@ -1,3 +1,4 @@
+name: demo
 services:
   api:
     description: 主业务 API 服务

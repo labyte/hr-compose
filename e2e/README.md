@@ -17,14 +17,14 @@ hr-compose restart api
 hr-compose down            # 停止 + 删除 unit
 
 # 2. 验证系统状态
-systemctl status api.service redis.service   # 应显示 inactive
-ls /etc/systemd/system/api.service           # 应不存在
+systemctl status demo-api.service demo-redis.service   # 应显示 inactive
+ls /etc/systemd/system/demo-api.service                # 应不存在
 ```
 
 ## 断言点
 
-- `up` 后 `api.service`、`redis.service` 存在且 `systemctl is-active` 为 active
-- redis 先于 api 启动（`journalctl -u api.service` 时间戳或启动日志）
+- `up` 后 `demo-api.service`、`demo-redis.service` 存在且 `systemctl is-active` 为 active（unit 文件名带 `name: demo` 前缀）
+- redis 先于 api 启动（`journalctl -u demo-api.service` 时间戳或启动日志）
 - `down` 后 unit 文件被删除、服务 inactive
 - 用非托管文件测试 `down` 保护：手工写一个 `xxx.service` 不带 `# MANAGED BY hr-compose` 标记，`down` 应拒绝删除
 - journal 模式服务：`hr-compose logs api` 能跟到 journald 输出

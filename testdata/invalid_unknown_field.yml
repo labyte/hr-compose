@@ -1,3 +1,4 @@
+name: demo
 services:
   api:
     command: /opt/myapp/api

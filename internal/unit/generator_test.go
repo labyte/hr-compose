@@ -17,7 +17,7 @@ func TestGenerate(t *testing.T) {
 		StdOutput:  "append:/data/logs/api.log",
 		DependsOn:  []string{"redis"},
 	}
-	g, err := Generate("api", svc)
+	g, err := Generate("api", svc, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestGenerate(t *testing.T) {
 func TestGenerateDefaultStdOutput(t *testing.T) {
 	// std_output 未配置时按默认 null（丢弃输出）写入。
 	svc := &config.Service{Command: "/opt/bin/x"}
-	g, err := Generate("x", svc)
+	g, err := Generate("x", svc, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestGenerateDefaultStdOutput(t *testing.T) {
 func TestGenerateDefaultRestart(t *testing.T) {
 	// restart / restart_sec 未配置时写入默认 always / 5。
 	svc := &config.Service{Command: "/opt/bin/x"}
-	g, err := Generate("x", svc)
+	g, err := Generate("x", svc, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestGenerateDefaultRestart(t *testing.T) {
 func TestGenerateDefaultUser(t *testing.T) {
 	// user 未配置时注入 User=（执行 up 的真实用户），不产生空 User=。
 	svc := &config.Service{Command: "/opt/bin/x"}
-	g, err := Generate("x", svc)
+	g, err := Generate("x", svc, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestGenerateDefaultUser(t *testing.T) {
 func TestGenerateNoneStdOutput(t *testing.T) {
 	// std_output: none 别名应归一为 null，写入 StandardOutput/StandardError=null。
 	svc := &config.Service{Command: "/opt/bin/x", StdOutput: "none"}
-	g, err := Generate("x", svc)
+	g, err := Generate("x", svc, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestGenerateNoneStdOutput(t *testing.T) {
 
 func TestGenerateNoDependsOn(t *testing.T) {
 	svc := &config.Service{Command: "/opt/bin/x"}
-	g, err := Generate("x", svc)
+	g, err := Generate("x", svc, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestGenerateNoDependsOn(t *testing.T) {
 
 func TestGenerateDescription(t *testing.T) {
 	svc := &config.Service{Command: "/opt/bin/x", Description: "主业务 API 服务"}
-	g, err := Generate("x", svc)
+	g, err := Generate("x", svc, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,11 +130,37 @@ func TestGenerateDescription(t *testing.T) {
 
 func TestGenerateDefaultDescription(t *testing.T) {
 	svc := &config.Service{Command: "/opt/bin/x"}
-	g, err := Generate("x", svc)
+	g, err := Generate("x", svc, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(g.Content, "Description=hr-compose service x") {
 		t.Errorf("未配置 description 时应使用默认值\n%s", g.Content)
+	}
+}
+
+func TestName(t *testing.T) {
+	if got := Name("", "api"); got != "api.service" {
+		t.Errorf(`Name("", "api") = %q, want api.service`, got)
+	}
+	if got := Name("myapp", "api"); got != "myapp-api.service" {
+		t.Errorf(`Name("myapp", "api") = %q, want myapp-api.service`, got)
+	}
+}
+
+func TestGenerateProjectPrefix(t *testing.T) {
+	// project 非空时 UnitPath 带前缀，depends_on 依赖名同样带前缀（同 project 内引用）。
+	svc := &config.Service{Command: "/opt/myapp/api", DependsOn: []string{"redis"}}
+	g, err := Generate("api", svc, "myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.UnitPath != "myapp-api.service" {
+		t.Errorf("UnitPath = %q, want myapp-api.service", g.UnitPath)
+	}
+	for _, want := range []string{"After=myapp-redis.service", "Wants=myapp-redis.service"} {
+		if !strings.Contains(g.Content, want) {
+			t.Errorf("content missing %q\n%s", want, g.Content)
+		}
 	}
 }

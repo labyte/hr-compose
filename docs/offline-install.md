@@ -60,7 +60,7 @@ hr-compose --version               # 打印版本号
 
 ## 3. 使用过程
 
-在**要管理服务所在的目录**下操作（hr-compose 只管理当前目录 `hr-compose.yml` 中定义的服务，无 project 概念）。
+在**要管理服务所在的目录**下操作（hr-compose 只管理当前目录 `hr-compose.yml` 中定义的服务；project 由顶层 `name:` 字段界定，unit 文件名带 `<name>-<service>.service` 前缀，不同 project 互不覆盖）。
 
 ### 3.1 初始化编排文件
 
@@ -75,6 +75,7 @@ hr-compose init                    # 生成默认 hr-compose.yml 模板（已存
 最小配置只写 描述 / 启动命令 / 工作目录 三个字段，其余走代码默认值：
 
 ```yaml
+name: myapp                          # 项目名（必填）：unit 文件名前缀 <name>-<service>.service
 services:
   app:
     description: 应用服务              # Description，服务描述
@@ -88,6 +89,7 @@ services:
 
 ```yaml
 version: "1.0"
+name: myapp
 services:
   api:
     description: 主业务 API 服务          # Description，服务描述
@@ -140,7 +142,7 @@ hr-compose ps                       # 带边框状态表：NAME / STATUS / ENABL
 ### 3.5 查看日志
 
 ```bash
-hr-compose logs api                 # journal 模式：journalctl -u api.service
+hr-compose logs api                 # journal 模式：journalctl -u <name>-api.service
 hr-compose logs api -f              # 实时跟踪
 hr-compose logs redis               # 非 journal 模式：提示 tail 查看对应日志文件
 ```

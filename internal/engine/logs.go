@@ -10,7 +10,7 @@ import (
 )
 
 // Logs 按服务 std_output 分发查看命令：
-//   - journal            → 执行 journalctl
+//   - journal            → 执行 journalctl（-u <unitName>，unit 名带 project 前缀）
 //   - file:<p>/append:<p> → 执行 tail 查看对应日志文件
 //   - null               → 提示用 tail 查看业务日志
 func (e *Engine) Logs(name string, follow bool) error {
@@ -19,17 +19,17 @@ func (e *Engine) Logs(name string, follow bool) error {
 		return err
 	}
 	for _, n := range names {
-		if err := dispatchLogs(n, e.cfg.Services[n], follow); err != nil {
+		if err := dispatchLogs(n, e.unitName(n), e.cfg.Services[n], follow); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func dispatchLogs(name string, svc *config.Service, follow bool) error {
+func dispatchLogs(name, unitName string, svc *config.Service, follow bool) error {
 	switch out := svc.EffectiveStdOutput(); {
 	case out == "journal":
-		args := []string{"-u", name + ".service", "--no-pager"}
+		args := []string{"-u", unitName, "--no-pager"}
 		if follow {
 			args = append(args, "-f")
 		}

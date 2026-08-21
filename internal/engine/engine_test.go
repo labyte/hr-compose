@@ -3,6 +3,7 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"hr.compose/internal/config"
@@ -289,7 +290,7 @@ func TestUpOverwritesManagedUnit(t *testing.T) {
 	if err := New(cfg, &fakeSys{}).Up(); err != nil {
 		t.Fatal(err)
 	}
-	g, err := unit.Generate("api", cfg.Services["api"])
+	g, err := unit.Generate("api", cfg.Services["api"], "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +307,7 @@ func TestUpSkipsUnchanged(t *testing.T) {
 	cfg := &config.Config{Services: map[string]*config.Service{
 		"api": {Command: "/x/api"},
 	}}
-	g, err := unit.Generate("api", cfg.Services["api"])
+	g, err := unit.Generate("api", cfg.Services["api"], "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,5 +319,64 @@ func TestUpSkipsUnchanged(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(UnitDir, "api.service")); string(b) != g.Content {
 		t.Error("内容一致时不应改写")
+	}
+}
+
+func TestUnitNamePrefix(t *testing.T) {
+	// cfg.Name（name:）非空时：unit 文件名、systemctl 动作、down 清理全部带 project 前缀，
+	// 使不同目录的同名服务互不覆盖。
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	fake := &fakeSys{}
+	cfg := &config.Config{
+		Name: "myapp",
+		Services: map[string]*config.Service{
+			"api":   {Command: "/x/api", DependsOn: []string{"redis"}},
+			"redis": {Command: "/x/redis"},
+		},
+	}
+	e := New(cfg, fake)
+	if err := e.Up(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"myapp-api", "myapp-redis"} {
+		if _, err := os.Stat(filepath.Join(UnitDir, name+".service")); err != nil {
+			t.Errorf("应写入 %s.service: %v", name, err)
+		}
+	}
+	// 依赖关系写入带前缀的 After/Wants
+	g, err := unit.Generate("api", cfg.Services["api"], "myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(g.Content, "After=myapp-redis.service") {
+		t.Errorf("After 应带 project 前缀\n%s", g.Content)
+	}
+	// systemctl 动作使用带前缀的 unit 名
+	for _, want := range []string{
+		"enable myapp-redis.service", "start myapp-redis.service",
+		"enable myapp-api.service", "start myapp-api.service",
+	} {
+		found := false
+		for _, a := range fake.actions {
+			if a == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("动作序列缺少 %q，got %v", want, fake.actions)
+		}
+	}
+	// down 清理带前缀的 unit，不残留
+	if err := e.Down(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"myapp-api", "myapp-redis"} {
+		if _, err := os.Stat(filepath.Join(UnitDir, name+".service")); !os.IsNotExist(err) {
+			t.Errorf("%s.service 应被删除", name)
+		}
 	}
 }

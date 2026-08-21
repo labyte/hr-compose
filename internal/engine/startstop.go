@@ -10,7 +10,7 @@ func (e *Engine) Start(name string) error {
 		return err
 	}
 	for _, n := range names {
-		if err := e.sys.Start(n + ".service"); err != nil {
+		if err := e.sys.Start(e.unitName(n)); err != nil {
 			return fmt.Errorf("启动 %s: %w", n, err)
 		}
 		fmt.Printf("start %s OK\n", n)
@@ -26,7 +26,7 @@ func (e *Engine) Stop(name string) error {
 	}
 	for i := len(names) - 1; i >= 0; i-- {
 		n := names[i]
-		if err := e.sys.Stop(n + ".service"); err != nil {
+		if err := e.sys.Stop(e.unitName(n)); err != nil {
 			return fmt.Errorf("停止 %s: %w", n, err)
 		}
 		fmt.Printf("stop %s OK\n", n)

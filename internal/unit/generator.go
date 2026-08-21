@@ -19,8 +19,19 @@ type Generated struct {
 	Hash     string // 内容 hash，用于 up 幂等比对
 }
 
-// Generate 把服务配置渲染成 systemd unit 文本。
-func Generate(name string, svc *config.Service) (*Generated, error) {
+// Name 拼出 unit 文件名：<project>-<service>.service；project 为空时不加前缀
+// （兼容直接构造 Config 的调用/测试）。project 来自 hr-compose.yml 的 name: 字段，
+// 保证不同目录的同名服务落成不同 unit 文件，互不覆盖。
+func Name(project, service string) string {
+	if project == "" {
+		return service + ".service"
+	}
+	return project + "-" + service + ".service"
+}
+
+// Generate 把服务配置渲染成 systemd unit 文本。project 是项目名（unit 文件名前缀），
+// depends_on 引用的同 project 服务依赖名也带上前缀。
+func Generate(name string, svc *config.Service, project string) (*Generated, error) {
 	var b strings.Builder
 	b.WriteString(ManagedMark + " -- 由 hr-compose 生成，请勿手动编辑，改动会被覆盖\n")
 
@@ -29,7 +40,7 @@ func Generate(name string, svc *config.Service) (*Generated, error) {
 	if len(svc.DependsOn) > 0 {
 		deps := make([]string, 0, len(svc.DependsOn))
 		for _, d := range svc.DependsOn {
-			deps = append(deps, d+".service")
+			deps = append(deps, Name(project, d))
 		}
 		joined := strings.Join(deps, " ")
 		fmt.Fprintf(&b, "After=%s\n", joined)
@@ -72,7 +83,7 @@ func Generate(name string, svc *config.Service) (*Generated, error) {
 
 	content := b.String()
 	return &Generated{
-		UnitPath: name + ".service",
+		UnitPath: Name(project, name),
 		Content:  content,
 		Hash:     fmt.Sprintf("%x", sha256.Sum256([]byte(content))),
 	}, nil

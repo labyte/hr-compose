@@ -34,7 +34,7 @@ func (e *Engine) Ps() error {
 	names := e.order()
 	unitNames := make([]string, len(names))
 	for i, n := range names {
-		unitNames[i] = n + ".service"
+		unitNames[i] = e.unitName(n)
 	}
 	// 一次批量查询所有 unit，减少进程启动
 	all, err := e.sys.ShowMany(unitNames)
@@ -43,7 +43,7 @@ func (e *Engine) Ps() error {
 	}
 	// 批量结果中缺失的 unit（未加载）回退逐服务查询
 	for _, n := range names {
-		u := n + ".service"
+		u := e.unitName(n)
 		if _, ok := all[u]; ok {
 			continue
 		}
@@ -57,7 +57,7 @@ func (e *Engine) Ps() error {
 	on := colorsOn()
 	for _, name := range names {
 		svc := e.cfg.Services[name]
-		fields, ok := all[name+".service"]
+		fields, ok := all[e.unitName(name)]
 		if !ok {
 			// Show 完全失败（如 systemctl 不可用/无任何输出）时按空状态展示；
 			// 未安装的 unit 在正常 systemd 下能取到 LoadState=not-found，会走下方 not-found 分支

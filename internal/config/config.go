@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -12,6 +13,9 @@ import (
 
 // Config 是 hr-compose.yml 的顶层结构。
 type Config struct {
+	// Name 是项目名（必填），unit 文件名前缀 <name>-<service>.service，
+	// 保证不同目录的同名服务互不覆盖。显式写死于此，重命名/移动目录不影响。
+	Name     string              `yaml:"name"`
 	Version  string              `yaml:"version"`
 	Services map[string]*Service `yaml:"services"`
 	// ServiceOrder 记录 services 在 yml 中的声明顺序。map 本身不保序，
@@ -164,6 +168,12 @@ func mappingValue(n *yaml.Node, key string) *yaml.Node {
 
 // Validate 执行 schema 校验。
 func (c *Config) Validate() error {
+	if strings.TrimSpace(c.Name) == "" {
+		return fmt.Errorf("缺少必填字段 name（项目名，unit 文件名前缀，需全局唯一）")
+	}
+	if err := validateProjectName(c.Name); err != nil {
+		return err
+	}
 	if len(c.Services) == 0 {
 		return fmt.Errorf("services 不能为空")
 	}
@@ -202,6 +212,46 @@ func validateServiceName(name string) error {
 		}
 	}
 	return nil
+}
+
+// validateProjectName 限制项目名字符集：项目名会成为 unit 文件名前缀。
+func validateProjectName(name string) error {
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return fmt.Errorf("name（项目名）%q 只能包含小写字母、数字、-、_", name)
+		}
+	}
+	return nil
+}
+
+// defaultProjectName 返回 init 写入模板的默认项目名：yml 所在目录 basename 的 sanitize 值。
+// 显式写进文件、可自行修改，重命名/移动目录不影响；sanitize 后为空时回退 my-project。
+func defaultProjectName(ymlPath string) string {
+	dir, err := filepath.Abs(filepath.Dir(ymlPath))
+	if err != nil {
+		return "my-project"
+	}
+	if n := sanitizeName(filepath.Base(dir)); n != "" {
+		return n
+	}
+	return "my-project"
+}
+
+// sanitizeName 把任意目录名规范化为合法项目名：小写、非法字符转 -、合并连续 -、去首尾 -。
+func sanitizeName(s string) string {
+	s = strings.ToLower(s)
+	var b strings.Builder
+	prevDash := false
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 // validateNoNewline 校验写入 unit 指令的值不含换行，防止向 systemd unit 文件注入额外指令。

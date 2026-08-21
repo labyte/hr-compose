@@ -14,6 +14,7 @@ cd "$WORKDIR"
 trap 'sudo "$BIN" down >/dev/null 2>&1 || true; rm -rf "$WORKDIR"' EXIT
 
 cat > hr-compose.yml <<'YAML'
+name: smoke-demo
 services:
   demo1:
     command: /usr/bin/sleep infinity
@@ -29,9 +30,10 @@ echo "==> 校验 yml 预览 unit"
 "$BIN" config --real | grep -q "文件不存在"
 
 echo "==> up 并验证状态"
+# unit 文件名带 project 前缀（name: smoke-demo）
 sudo "$BIN" up
-test "$(systemctl is-active demo1.service)" = "active"
-test "$(systemctl is-active demo2.service)" = "active"
+test "$(systemctl is-active smoke-demo-demo1.service)" = "active"
+test "$(systemctl is-active smoke-demo-demo2.service)" = "active"
 "$BIN" ps | grep -q "demo1"
 "$BIN" ps | grep -q "running"
 # up 后 --real 应展示磁盘上的实际文件内容
@@ -39,14 +41,14 @@ test "$(systemctl is-active demo2.service)" = "active"
 
 echo "==> stop 保留 unit / start 恢复"
 sudo "$BIN" stop
-test "$(systemctl is-active demo1.service)" = "inactive"
-test -e /etc/systemd/system/demo1.service
+test "$(systemctl is-active smoke-demo-demo1.service)" = "inactive"
+test -e /etc/systemd/system/smoke-demo-demo1.service
 sudo "$BIN" start
-test "$(systemctl is-active demo1.service)" = "active"
+test "$(systemctl is-active smoke-demo-demo1.service)" = "active"
 
 echo "==> down 清理"
 sudo "$BIN" down
-test ! -e /etc/systemd/system/demo1.service
-test ! -e /etc/systemd/system/demo2.service
+test ! -e /etc/systemd/system/smoke-demo-demo1.service
+test ! -e /etc/systemd/system/smoke-demo-demo2.service
 
 echo "E2E OK"

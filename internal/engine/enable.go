@@ -9,7 +9,7 @@ func (e *Engine) Enable(name string) error {
 		return err
 	}
 	for _, n := range names {
-		if err := e.sys.Enable(n + ".service"); err != nil {
+		if err := e.sys.Enable(e.unitName(n)); err != nil {
 			return fmt.Errorf("enable %s: %w", n, err)
 		}
 		fmt.Printf("enable %s OK\n", n)
@@ -24,7 +24,7 @@ func (e *Engine) Disable(name string) error {
 		return err
 	}
 	for _, n := range names {
-		if err := e.sys.Disable(n + ".service"); err != nil {
+		if err := e.sys.Disable(e.unitName(n)); err != nil {
 			return fmt.Errorf("disable %s: %w", n, err)
 		}
 		fmt.Printf("disable %s OK\n", n)

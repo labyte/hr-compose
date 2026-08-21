@@ -20,7 +20,7 @@ func (e *Engine) Config(name string, real bool) error {
 	}
 	var b strings.Builder
 	for _, n := range names {
-		path := filepath.Join(UnitDir, n+".service")
+		path := filepath.Join(UnitDir, e.unitName(n))
 		if real {
 			content, err := os.ReadFile(path)
 			switch {
@@ -35,7 +35,7 @@ func (e *Engine) Config(name string, real bool) error {
 			}
 			continue
 		}
-		g, err := unit.Generate(n, e.cfg.Services[n])
+		g, err := unit.Generate(n, e.cfg.Services[n], e.cfg.Name)
 		if err != nil {
 			return err
 		}

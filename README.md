@@ -96,6 +96,7 @@ sudo rm /usr/local/bin/hr-compose   # 2. 删除二进制（若装了自定义目
 在项目目录写一份 `hr-compose.yml`（也可以先 `hr-compose init` 生成模板再编辑）：
 
 ```yaml
+name: myapp                     # 项目名（必填）：unit 文件名前缀 <name>-<service>.service，需全局唯一
 services:
   redis:
     command: /opt/redis/redis-server /opt/redis/redis.conf
@@ -170,9 +171,10 @@ unit 实际文件路径不在此展示，用 `hr-compose config` 预览时会在
 
 ### 最小配置示例
 
-只写 描述 / 启动命令 / 工作目录 三个字段即可，其余走代码默认值：
+必填 `name`（项目名）+ `command`，其余走代码默认值：
 
 ```yaml
+name: myapp
 services:
   app:
     description: 应用服务              # Description，服务描述
@@ -195,6 +197,7 @@ services:
 
 ```yaml
 version: "1.0"
+name: myapp
 services:
   api:
     description: 主业务 API 服务          # Description，服务描述
@@ -229,6 +232,7 @@ services:
 
 | 字段 | 说明 | 写入的 systemd 指令 |
 | --- | --- | --- |
+| `name` | 项目名（**必填**）：unit 文件名前缀 `<name>-<service>.service`，需全局唯一；显式写死于此，重命名/移动目录不影响 | —（不参与 systemd 配置，决定 unit 文件名） |
 | `description` | 服务描述（默认 `hr-compose service <name>`） | `Description` |
 | `command` | 启动命令（**必须前台运行，不要 daemon**，必填） | `ExecStart` |
 | `working_dir` | 工作目录 | `WorkingDirectory` |
@@ -250,7 +254,7 @@ services:
 | --- | --- | --- |
 | `null`（默认） | 丢弃 stdout/stderr，日志由业务程序自行写入外部文件 | 提示用 `tail -f` 查看外部日志文件（配合 `log_file`） |
 | `none` | `null` 的兼容写法（旧版本推荐，语义相同） | 同上 |
-| `journal` | 写入 journald（非默认，需显式配置） | 执行 `journalctl -u <svcname>.service [-f]` |
+| `journal` | 写入 journald（非默认，需显式配置） | 执行 `journalctl -u <name>-<svcname>.service [-f]` |
 | `file:<path>` | 覆盖写入（截断原文件） | 提示用 `tail -f <path>` 查看 |
 | `append:<path>` | 追加写入 | 提示用 `tail -f <path>` 查看 |
 
@@ -264,11 +268,12 @@ services:
 
 - **需要 root**：`up` / `down` / `start` / `stop` / `restart` / `clean` 操作 systemd（`/etc/systemd/system`）或日志，需 `sudo`。`ps` / `logs` / `config` 为只读，普通用户即可。
 - **`stop` 与 `down` 的区别**：`stop` 只停进程，保留 unit 文件与 enable 状态（可随时 `start` 恢复）；`down` 会删除 unit 并 disable（下次要 `up` 重建）。临时停服用 `stop`。
-- **服务名即 unit 文件名**：服务名只用小写字母、数字、`-`、`_`；避免与系统已有 unit 同名冲突。
+- **unit 文件名带 project 前缀**：服务名只用小写字母、数字、`-`、`_`，unit 文件名 = `<name>-<service>.service`（`name` 同样限字符集）。不同目录配同名服务会落成不同 unit 文件，互不覆盖；同一 `name:` 下服务才互相编排（`depends_on` 仅 project 内生效）。
 - **删除/覆盖保护**：unit 文件头部有 `# MANAGED BY hr-compose` 标记；`down` 只删除带该标记的文件，`up` 也不会覆盖非该标记的同名 unit——防止误删/误覆盖同名系统服务。如确需让 hr-compose 托管某个同名 unit，先删除原文件再 `up`。
 - **`std_output` 默认丢弃输出**：未配置时生成 `StandardOutput=null`，日志由业务程序自行管理；要进 journald 需显式 `std_output: journal`。丢弃输出直接裸写 `std_output: null` 即可（无需加引号）；`none` 为兼容旧写法。
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize，否则 systemd 会认为服务未启动。
-- **无 project 概念**：工具只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统上其他 unit。
+- **project 由 `name` 界定**：工具只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统上其他 unit；同一 `name:` 下的 unit 归属该 project，不同 project 互不影响。
+- **从旧版升级（破坏性）**：`name` 为必填，旧 yml 需补 `name:` 才能继续使用；且 unit 文件名由 `<service>.service` 变为 `<name>-<service>.service`，旧 unit 不会被新版 `down` 清理——升级前先 `down` 旧服务（或手动 `systemctl stop/disable <svc>.service` 并删除对应文件），再用新版 `up`。
 - **ps 彩色输出**：终端下状态自动着色，管道/重定向自动无色；设 `NO_COLOR=1` 可强制关闭。
 
 ---

@@ -17,6 +17,7 @@ func writeFixture(t *testing.T, content string) string {
 
 func TestLoadValid(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services:
   api:
     command: /opt/myapp/api
@@ -39,6 +40,7 @@ services:
 func TestLoadRecordsServiceOrder(t *testing.T) {
 	// 声明顺序与字母序相反（web > api > zzz），ServiceOrder 应按声明顺序记录
 	p := writeFixture(t, `
+name: testproj
 services:
   web:
     command: /opt/myapp/web
@@ -65,6 +67,7 @@ services:
 
 func TestRejectUnknownField(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services:
   api:
     command: /opt/myapp/api
@@ -77,6 +80,7 @@ services:
 
 func TestRejectMissingCommand(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services:
   api:
     working_dir: /opt/myapp
@@ -88,6 +92,7 @@ services:
 
 func TestRejectBadDependsOn(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services:
   api:
     command: /opt/myapp/api
@@ -100,6 +105,7 @@ services:
 
 func TestRejectInvalidServiceName(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services:
   "Api.Svc":
     command: /opt/myapp/api
@@ -111,6 +117,7 @@ services:
 
 func TestRejectEmptyServices(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services: {}
 `)
 	if _, err := Load(p); err == nil {
@@ -118,8 +125,82 @@ services: {}
 	}
 }
 
+func TestRejectMissingName(t *testing.T) {
+	// name 必填：缺省时所有命令（Load）都应报错，引导用户显式声明项目名。
+	p := writeFixture(t, `
+services:
+  api:
+    command: /opt/myapp/api
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("want error for missing name")
+	}
+}
+
+func TestRejectInvalidName(t *testing.T) {
+	// name 会成为 unit 文件名前缀，字符集受限（含大写/点/空格均非法）。
+	p := writeFixture(t, `
+name: My.App
+services:
+  api:
+    command: /opt/myapp/api
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("want error for invalid name")
+	}
+}
+
+func TestLoadSetsName(t *testing.T) {
+	p := writeFixture(t, `
+name: app1
+services:
+  api:
+    command: /opt/myapp/api
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "app1" {
+		t.Errorf("Name = %q, want app1", cfg.Name)
+	}
+}
+
+func TestSanitizeName(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"MyApp", "myapp"},
+		{"My.App", "my-app"},
+		{"a b c", "a-b-c"},
+		{"already-ok_1", "already-ok_1"},
+		{"你好世界", ""}, // 全非法 → 空
+	} {
+		if got := sanitizeName(tc.in); got != tc.want {
+			t.Errorf("sanitizeName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestDefaultProjectName(t *testing.T) {
+	// 取 yml 所在目录 basename 的 sanitize 值；目录名全非法时回退 my-project。
+	dir := filepath.Join(t.TempDir(), "My App")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := defaultProjectName(filepath.Join(dir, "hr-compose.yml")); got != "my-app" {
+		t.Errorf("defaultProjectName = %q, want my-app", got)
+	}
+	bad := filepath.Join(t.TempDir(), "你好世界")
+	if err := os.MkdirAll(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := defaultProjectName(filepath.Join(bad, "hr-compose.yml")); got != "my-project" {
+		t.Errorf("defaultProjectName(全非法目录) = %q, want my-project", got)
+	}
+}
+
 func TestQuotedNullStdOutput(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services:
   worker:
     command: /opt/worker
@@ -137,6 +218,7 @@ services:
 func TestUnquotedNullDefaultsToNull(t *testing.T) {
 	// 未加引号的 null 是 YAML null 字面量，等价于"未配置"，按默认 null（丢弃输出）处理。
 	p := writeFixture(t, `
+name: testproj
 services:
   worker:
     command: /opt/worker
@@ -154,6 +236,7 @@ services:
 func TestNoneStdOutputAlias(t *testing.T) {
 	// std_output: none 是旧版本推荐的写法，兼容保留，同样归一为 "null"。
 	p := writeFixture(t, `
+name: testproj
 services:
   worker:
     command: /opt/worker
@@ -171,6 +254,7 @@ services:
 func TestDefaultRestart(t *testing.T) {
 	// restart / restart_sec 未配置时走代码默认：always / 5。
 	p := writeFixture(t, `
+name: testproj
 services:
   worker:
     command: /opt/worker
@@ -190,6 +274,7 @@ services:
 
 func TestExplicitRestartPassthrough(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services:
   worker:
     command: /opt/worker
@@ -211,6 +296,7 @@ services:
 
 func TestEffectiveUserPassthrough(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services:
   worker:
     command: /opt/worker
@@ -231,6 +317,7 @@ func TestEffectiveUserDefaultsToResolver(t *testing.T) {
 	defer func() { userResolver = old }()
 	userResolver = func() string { return "alice" }
 	p := writeFixture(t, `
+name: testproj
 services:
   worker:
     command: /opt/worker
@@ -262,6 +349,7 @@ func TestUserResolverPrefersSudoUser(t *testing.T) {
 
 func TestParseDescription(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services:
   api:
     description: 主业务 API 服务
@@ -282,6 +370,7 @@ services:
 
 func TestEffectiveDescriptionDefault(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services:
   api:
     command: /opt/myapp/api
@@ -297,6 +386,7 @@ services:
 
 func TestRejectNewlineInCommand(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services:
   api:
     command: "/bin/true\nExecStart=/bin/evil"
@@ -308,6 +398,7 @@ services:
 
 func TestRejectNewlineInEnvironment(t *testing.T) {
 	p := writeFixture(t, `
+name: testproj
 services:
   api:
     command: /opt/myapp/api
