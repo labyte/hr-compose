@@ -142,7 +142,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | `disable [name]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
 | `ps` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / UPTIME 运行时长 / DESCRIPTION 描述列），内存自动转友好单位，终端下状态彩色显示 | `hr-compose ps` |
 | `logs [name] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发 | `hr-compose logs api -f` |
-| `config [name]` | 校验 yml 并打印生成的 unit 内容（段头标注完整 unit 文件路径），可指定单个服务 | `hr-compose config api` |
+| `config [name] [--real]` | 校验 yml 并打印 service 内容，可指定单个服务：默认打印生成的 unit 预览（段头标注"预览"与完整 unit 文件路径）；`--real` 读取磁盘上实际的 unit 文件（段头标注"实际文件"，文件不存在时给出提示，可用于对比预览与实际差异） | `hr-compose config api --real` |
 
 全局参数：`--file <path>` 指定编排文件（默认当前目录 `hr-compose.yml`）。注意 `-f` 是 `logs` 的 `--follow` 简写。
 
@@ -158,7 +158,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 
 MEMORY 列为 systemd 报告的内存字节数，自动格式化为 `K / M / G` 友好单位（未统计时显示 `-`）。
 
-unit 实际文件路径不在此展示，用 `hr-compose config` 预览时会在段头标注完整路径（如 `/etc/systemd/system/<服务名>.service`）。
+unit 实际文件路径不在此展示，用 `hr-compose config` 预览时会在段头标注完整路径（如 `/etc/systemd/system/<服务名>.service`）；`config --real` 直接展示磁盘上已安装的 unit 文件内容，可与预览对比差异。
 
 开机启动状态用 `enable` / `disable` 命令修改（`up` 会自动 enable，`down` 会 disable）。
 
@@ -277,6 +277,7 @@ services:
 
 ```bash
 hr-compose config            # 校验 yml、预览生成的 unit 内容
+hr-compose config --real     # 查看磁盘上实际的 unit 文件内容，对比是否与预览一致
 systemctl status <svc>.service   # 查看 systemd 层面的真实状态
 journalctl -u <svc>.service      # 查看 journal 日志
 ```

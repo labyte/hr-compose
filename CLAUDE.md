@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 hr-compose 是一个对标简化版 docker-compose 的 Go CLI：读取 `hr-compose.yml` 编排文件，在 Linux 裸机上基于 **systemd** 管理多个自研业务服务的启停与编排。核心设计原则是**复用 systemd，不重复造轮子**——进程监控、自启、重启、日志全交给 systemd，CLI 只做编排解析、unit 生成与 systemctl/journalctl 封装，保持薄。
 
-命令：`init` / `up` / `start` / `stop` / `restart [name]` / `enable` / `disable` / `down` / `clean [name]` / `ps` / `logs [name] [-f]` / `config [name]`。无 project 概念，只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统其他 unit。
+命令：`init` / `up` / `start` / `stop` / `restart [name]` / `enable` / `disable` / `down` / `clean [name]` / `ps` / `logs [name] [-f]` / `config [name] [--real]`。无 project 概念，只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统其他 unit。
 
 ## 设计原则（改动时须遵循）
 
@@ -74,7 +74,7 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 - **`user` 省略时以执行 `up` 的用户运行**：`EffectiveUser()` 取 `SUDO_USER`（sudo 下）或当前用户。注意可复现性：同一 yml 被多人/CI 各自 `up` 会生成不同 `User=`（内容 hash 变 → 重写重启），共享编排建议显式 `user`。
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize。
 - **`ps` 的行为**：遍历 yml 中定义的服务逐个 `systemctl show`；unit 未加载时输出 `-` 空状态，不报错。
-- **`ps` 用 go-pretty 渲染**：`text/tabwriter` 或手动定宽会把 ANSI 转义码计入列宽导致错位，改用 `github.com/jedib0t/go-pretty/v6`（会剥离 ANSI 计算可见宽度，可安全把 `text.Colors.Sprint` 生成的彩色字符串直接作为单元格）。列：NAME / STATUS（`mergedState` 合并 `ActiveState`+`SubState`+`LoadState` 为单字人话状态：not-found/running/exited/waiting/stopped/starting/restarting/stopping/reloading/failed，`LoadState=not-found` 表达未安装（unit 不存在，含 down 后），区别于已安装但停止的 stopped；activating 统一 starting、deactivating 统一 stopping、auto-restart 单独 restarting，罕见组合回退 `主/子`）/ ENABLED（`UnitFileState` 是否开机启动）/ PID / MEMORY / UPTIME（`ExecMainStartTimestampMonotonic` 减 `/proc/uptime` 算出主进程运行时长，`uptimeSince`+`formatUptime` 格式化，仅 `runningStates` 内状态展示）/ DESCRIPTION；unit 实际文件路径不在 ps 展示，`config` 命令预览时在段头标注完整路径（`filepath.Join(UnitDir, unitPath)`）。状态列用 `stateColors` 着色、`formatBytes` 格式化内存、`valueOrDash` 处理空值。勿改回 tabwriter 上色。
+- **`ps` 用 go-pretty 渲染**：`text/tabwriter` 或手动定宽会把 ANSI 转义码计入列宽导致错位，改用 `github.com/jedib0t/go-pretty/v6`（会剥离 ANSI 计算可见宽度，可安全把 `text.Colors.Sprint` 生成的彩色字符串直接作为单元格）。列：NAME / STATUS（`mergedState` 合并 `ActiveState`+`SubState`+`LoadState` 为单字人话状态：not-found/running/exited/waiting/stopped/starting/restarting/stopping/reloading/failed，`LoadState=not-found` 表达未安装（unit 不存在，含 down 后），区别于已安装但停止的 stopped；activating 统一 starting、deactivating 统一 stopping、auto-restart 单独 restarting，罕见组合回退 `主/子`）/ ENABLED（`UnitFileState` 是否开机启动）/ PID / MEMORY / UPTIME（`ExecMainStartTimestampMonotonic` 减 `/proc/uptime` 算出主进程运行时长，`uptimeSince`+`formatUptime` 格式化，仅 `runningStates` 内状态展示）/ DESCRIPTION；unit 实际文件路径不在 ps 展示，`config` 命令默认预览时在段头标注"预览"与完整路径（`filepath.Join(UnitDir, unitPath)`），`config --real` 读取并打印磁盘上实际的 unit 文件（段头标注"实际文件"，文件不存在时给出提示而非报错）。状态列用 `stateColors` 着色、`formatBytes` 格式化内存、`valueOrDash` 处理空值。勿改回 tabwriter 上色。
 - **`logs` 的分发**：按 `std_output` 值分流——`journal` 执行 `journalctl -u <svc>.service`（`-f` 跟随）；`file:<p>` / `append:<p>` 执行 `tail` 查看（文件不存在给提示）；未配置（默认 null）与 `none`（旧写法）只打印 `tail` 提示。`log_file` 字段仅用于 null 模式的 tail 提示，不参与 systemd 配置。
 - **journal 清理是全局的**：journald 不支持按 unit 删除日志，`down`（存在显式 `std_output: journal` 服务时；默认 null 不触发）与 `clean [name]` 对 journal 服务执行 `journalctl --rotate` + `--vacuum-size=1`，清空**整个系统 journal**（非仅 hr-compose 服务的日志）。`clean` 对 `file:`/`append:` 服务截断对应文件、`null` 仅提示。
 

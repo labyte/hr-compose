@@ -24,7 +24,9 @@ services:
 YAML
 
 echo "==> 校验 yml 预览 unit"
-"$BIN" config
+"$BIN" config | grep -q "预览"
+# up 前磁盘上尚无 unit 文件，--real 应提示不存在而非报错
+"$BIN" config --real | grep -q "文件不存在"
 
 echo "==> up 并验证状态"
 sudo "$BIN" up
@@ -32,6 +34,8 @@ test "$(systemctl is-active demo1.service)" = "active"
 test "$(systemctl is-active demo2.service)" = "active"
 "$BIN" ps | grep -q "demo1"
 "$BIN" ps | grep -q "running"
+# up 后 --real 应展示磁盘上的实际文件内容
+"$BIN" config --real demo1 | grep -q "MANAGED BY hr-compose"
 
 echo "==> stop 保留 unit / start 恢复"
 sudo "$BIN" stop
