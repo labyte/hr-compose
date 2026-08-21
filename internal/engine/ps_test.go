@@ -54,26 +54,29 @@ func TestFormatBytes(t *testing.T) {
 }
 
 func TestMergedState(t *testing.T) {
-	cases := []struct{ active, sub, want string }{
-		{"active", "running", "running"},             // 运行中
-		{"active", "", "active"},                     // 空子状态，回退主状态
-		{"active", "exited", "exited"},               // oneshot 已完成
-		{"active", "waiting", "waiting"},             // notify 未就绪
-		{"inactive", "dead", "stopped"},              // 已停止
-		{"failed", "failed", "failed"},               // 子状态与主状态相同，省略
-		{"failed", "", "failed"},                     // 空子状态
-		{"activating", "start", "starting"},          // 启动中
-		{"activating", "start-pre", "starting"},      // 启动中（前置步骤）
-		{"activating", "auto-restart", "restarting"}, // 自动重启中，单独表达
-		{"deactivating", "stop", "stopping"},         // 停止中
-		{"deactivating", "stop-sigterm", "stopping"}, // 内部细节不展示
-		{"reloading", "reload", "reloading"},         // 重载中
-		{"active", "degraded", "active/degraded"},    // 罕见组合回退两级
-		{"inactive", "exited", "inactive/exited"},    // 罕见组合回退两级
+	cases := []struct{ active, sub, load, want string }{
+		{"active", "running", "loaded", "running"},             // 运行中
+		{"active", "", "loaded", "active"},                     // 空子状态，回退主状态
+		{"active", "exited", "loaded", "exited"},               // oneshot 已完成
+		{"active", "waiting", "loaded", "waiting"},             // notify 未就绪
+		{"inactive", "dead", "loaded", "stopped"},              // 已安装但停止
+		{"inactive", "dead", "", "stopped"},                    // LoadState 缺失时按已安装处理（兼容旧输出）
+		{"inactive", "dead", "not-found", "not-found"},         // 未安装（unit 不存在，含 down 后），优先于 stopped
+		{"active", "", "not-found", "not-found"},               // not-found 优先于其他组合
+		{"failed", "failed", "loaded", "failed"},               // 子状态与主状态相同，省略
+		{"failed", "", "loaded", "failed"},                     // 空子状态
+		{"activating", "start", "loaded", "starting"},          // 启动中
+		{"activating", "start-pre", "loaded", "starting"},      // 启动中（前置步骤）
+		{"activating", "auto-restart", "loaded", "restarting"}, // 自动重启中，单独表达
+		{"deactivating", "stop", "loaded", "stopping"},         // 停止中
+		{"deactivating", "stop-sigterm", "loaded", "stopping"}, // 内部细节不展示
+		{"reloading", "reload", "loaded", "reloading"},         // 重载中
+		{"active", "degraded", "loaded", "active/degraded"},    // 罕见组合回退两级
+		{"inactive", "exited", "loaded", "inactive/exited"},    // 罕见组合回退两级
 	}
 	for _, tc := range cases {
-		if got := mergedState(tc.active, tc.sub); got != tc.want {
-			t.Errorf("mergedState(%q, %q) = %q, want %q", tc.active, tc.sub, got, tc.want)
+		if got := mergedState(tc.active, tc.sub, tc.load); got != tc.want {
+			t.Errorf("mergedState(%q, %q, %q) = %q, want %q", tc.active, tc.sub, tc.load, got, tc.want)
 		}
 	}
 }
@@ -225,5 +228,50 @@ func TestPsFallbackPerUnitWhenMissingFromBatch(t *testing.T) {
 	out := stdout.(*bytes.Buffer).String()
 	if !strings.Contains(out, "running") {
 		t.Errorf("redis 缺失于批量结果时应通过 Show 回退取到 running\n%s", out)
+	}
+}
+
+// notFoundFake 模拟某服务未安装（LoadState=not-found，unit 文件不存在，含 down 后），其余服务正常。
+type notFoundFake struct {
+	*fakeSys
+}
+
+func (f *notFoundFake) ShowMany(units []string) (map[string]map[string]string, error) {
+	m := map[string]map[string]string{}
+	for _, u := range units {
+		if u == "redis.service" {
+			fields := fakeShowFields()
+			fields["ActiveState"] = "inactive"
+			fields["SubState"] = "dead"
+			fields["LoadState"] = "not-found"
+			fields["UnitFileState"] = ""
+			fields["MainPID"] = "0"
+			m[u] = fields
+		} else {
+			m[u] = fakeShowFields()
+		}
+	}
+	return m, nil
+}
+
+func TestPsNotInstalledShowsNotFound(t *testing.T) {
+	oldOut, oldOverride := stdout, colorOverride
+	stdout = &bytes.Buffer{}
+	colorOverride = "never"
+	defer func() { stdout, colorOverride = oldOut, oldOverride }()
+
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api":   {Command: "/x/api"},
+		"redis": {Command: "/x/redis"},
+	}}
+	if err := New(cfg, &notFoundFake{&fakeSys{}}).Ps(); err != nil {
+		t.Fatal(err)
+	}
+	out := stdout.(*bytes.Buffer).String()
+	if !strings.Contains(out, "not-found") {
+		t.Errorf("未安装的服务应展示 not-found 而非 stopped\n%s", out)
+	}
+	if strings.Contains(out, "stopped") {
+		t.Errorf("未安装的服务不应展示 stopped\n%s", out)
 	}
 }

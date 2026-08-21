@@ -59,7 +59,8 @@ func (e *Engine) Ps() error {
 		svc := e.cfg.Services[name]
 		fields, ok := all[name+".service"]
 		if !ok {
-			// unit 未加载（未启动过或已 down）时按空状态展示
+			// Show 完全失败（如 systemctl 不可用/无任何输出）时按空状态展示；
+			// 未安装的 unit 在正常 systemd 下能取到 LoadState=not-found，会走下方 not-found 分支
 			t.AppendRow(table.Row{name, "-", "-", "-", "-", "-", "-", valueOrDash(svc.Description)})
 			continue
 		}
@@ -76,7 +77,7 @@ func (e *Engine) Ps() error {
 		// go-pretty 计算列宽时会剥离 ANSI 转义，可安全用 Sprint 生成的彩色字符串作为单元格
 		t.AppendRow(table.Row{
 			name,
-			colors.Sprint(mergedState(fields["ActiveState"], fields["SubState"])),
+			colors.Sprint(mergedState(fields["ActiveState"], fields["SubState"], fields["LoadState"])),
 			valueOrDash(fields["UnitFileState"]),
 			fields["MainPID"],
 			formatBytes(fields["MemoryCurrent"]),
@@ -95,15 +96,19 @@ var runningStates = map[string]bool{
 	"active": true, "activating": true, "deactivating": true, "reloading": true,
 }
 
-// mergedState 把 ActiveState 与 SubState 合并为单列状态，输出面向使用者的人话词汇：
+// mergedState 把 ActiveState、SubState 与 LoadState 合并为单列状态，输出面向使用者的人话词汇：
+//   - LoadState=not-found（未安装，unit 文件不存在，含 down 后）优先表达为 not-found，
+//     区别于已安装但停止的 stopped
 //   - 常见组合映射为单字：running（运行中）/ exited（oneshot 已完成）/ waiting（notify 未就绪）/
 //     stopped（已停止）/ starting（启动中）/ restarting（自动重启中）/ stopping（停止中）/ reloading（重载中）/ failed（失败）
 //   - activating 统一为 starting、deactivating 统一为 stopping（stop-sigterm 等内部细节不展示）；
 //     auto-restart 是自动重启中，单独表达为 restarting（重点状态）
 //   - 子状态为空或与主状态相同（如 failed/failed）时只显示主状态
 //   - 罕见组合回退 "主/子" 两级展示，信息不丢失
-func mergedState(active, sub string) string {
+func mergedState(active, sub, load string) string {
 	switch {
+	case load == "not-found":
+		return "not-found"
 	case sub == "" || sub == active:
 		return active
 	case active == "active" && sub == "running":

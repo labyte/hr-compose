@@ -46,6 +46,7 @@ func fakeShowFields() map[string]string {
 	return map[string]string{
 		"ActiveState":                     "active",
 		"SubState":                        "running",
+		"LoadState":                       "loaded",
 		"UnitFileState":                   "enabled",
 		"MainPID":                         "123",
 		"MemoryCurrent":                   "1048576",

@@ -152,7 +152,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 
 | 列 | 对应 systemd | 含义 |
 | --- | --- | --- |
-| **STATUS** | `ActiveState` + `SubState` | 合并为单列人话状态：`running` 运行中 / `exited` 已完成（oneshot 退出后保持）/ `waiting` 等待中（notify 未就绪）/ `stopped` 已停止 / `starting` 启动中 / `restarting` 自动重启中 / `stopping` 停止中 / `reloading` 重载中 / `failed` 失败；罕见组合回退为 `主/子` 两级展示 |
+| **STATUS** | `ActiveState` + `SubState` + `LoadState` | 合并为单列人话状态：`not-found` 未安装（unit 文件不存在，含 `down` 后）/ `running` 运行中 / `exited` 已完成（oneshot 退出后保持）/ `waiting` 等待中（notify 未就绪）/ `stopped` 已停止（已安装但停止）/ `starting` 启动中 / `restarting` 自动重启中 / `stopping` 停止中 / `reloading` 重载中 / `failed` 失败；罕见组合回退为 `主/子` 两级展示 |
 | **ENABLED** | `UnitFileState` | 是否开机启动：`enabled` 已启用 / `disabled` 未启用 / `static` 等 |
 | **UPTIME** | `ExecMainStartTimestampMonotonic` | 主进程已运行时长（`45s` / `5m` / `2h` / `3d`）；服务重启后从头累计，可据此判断是否重启过；停止/失败/未启动的服务显示 `-` |
 | **CONFIG** | `FragmentPath` | systemd 实际加载的 unit 文件路径（如 `/etc/systemd/system/<服务名>.service`） |

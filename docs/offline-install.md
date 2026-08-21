@@ -132,7 +132,7 @@ sudo hr-compose up                  # 生成 unit 到 /etc/systemd/system、enab
 `up` 是幂等的：重复执行不会重复创建或报错，unit 内容没变化时是空操作。想单点看状态随时执行：
 
 ```bash
-hr-compose ps                       # 带边框状态表：NAME / ACTIVE / SUB / ENABLED / PID / MEMORY / DESCRIPTION
+hr-compose ps                       # 带边框状态表：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME / CONFIG / DESCRIPTION
 ```
 
 ### 3.5 查看日志
@@ -210,7 +210,7 @@ sudo rm /usr/local/bin/hr-compose         # 2. 删除二进制（自定义目录
 - **`up` 报权限错误**：操作 `/etc/systemd/system` 需要 root，命令前加 `sudo`。
 - **服务状态始终不是 running**：`command` 必须前台运行，业务程序不能 daemonize，否则 systemd 认为服务未启动。
 - **日志看不到内容**：按 `std_output` 分发——未配置默认 `null`（丢弃输出），日志由业务程序自行写文件，用 `tail -f` 查看；`journal` 走 `journalctl`；`file:` / `append:` 查看对应文件（可用 `log_file` 字段让 `logs` 提示正确路径）。
-- **`ps` 状态列为 `-`**：unit 未加载（还没 `up`，或已被 `down` 清理）时输出空状态，不报错。
+- **`ps` 状态列为 `not-found`**：unit 未安装（还没 `up`，或已被 `down` 清理）时显示 `not-found`（未安装），与已安装但停止的 `stopped` 区分；仅当 systemctl 完全无输出时状态列显示 `-`，两种情况都不报错。
 - **卸载后日志残留**：`down` 在存在 journal 服务时会清空**整个系统** journal（journald 不支持按 unit 删除），与 hr-compose 无直接关联的日志也会被清空，属已知行为。
 
 更多细节与完整字段说明见项目根目录 [README](../README.md)。
