@@ -182,18 +182,21 @@ func TestPsColumns(t *testing.T) {
 	colorOverride = "never"
 	defer func() { stdout, colorOverride = oldOut, oldOverride }()
 
-	// fakeSys.Show 返回 active/running/enabled/123/1048576 + fragment 路径 + 单调启动时刻；
-	// 期望 UPTIME=50m、CONFIG=FragmentPath、description 都出现在表中
+	// fakeSys.Show 返回 active/running/enabled/123/1048576 + 单调启动时刻；
+	// 期望 UPTIME=50m、description 都出现在表中，且 CONFIG 列已移除
 	out := runPs(t, map[string]*config.Service{
 		"api": {Command: "/x/api", Description: "主业务 API"},
 	})
 	for _, want := range []string{
-		"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME", "CONFIG", "DESCRIPTION",
-		"api", "running", "enabled", "1.0M", "50m", "/etc/systemd/system/api.service", "主业务 API",
+		"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME", "DESCRIPTION",
+		"api", "running", "enabled", "1.0M", "50m", "主业务 API",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("输出应包含 %q\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "CONFIG") {
+		t.Errorf("ps 表不应再包含 CONFIG 列\n%s", out)
 	}
 }
 

@@ -19,13 +19,13 @@ var stdout io.Writer = os.Stdout
 var uptimeFile = "/proc/uptime"
 
 // Ps 遍历 yml 服务，逐个读取 systemd 状态并格式化输出。
-// 列：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME / CONFIG / DESCRIPTION，终端下状态列着色。
-// STATUS=ActiveState 与 SubState 合并（mergedState），UPTIME=主进程运行时长（可判断是否重启过），
-// CONFIG=FragmentPath（systemd 实际加载的 unit 文件路径），ENABLED=UnitFileState（是否开机启动）。
+// 列：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME / DESCRIPTION，终端下状态列着色。
+// STATUS=ActiveState、SubState 与 LoadState 合并（mergedState），UPTIME=主进程运行时长（可判断是否重启过），
+// ENABLED=UnitFileState（是否开机启动）。unit 实际文件路径见 config 命令预览。
 func (e *Engine) Ps() error {
 	t := table.NewWriter()
 	t.SetOutputMirror(stdout)
-	t.AppendHeader(table.Row{"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME", "CONFIG", "DESCRIPTION"})
+	t.AppendHeader(table.Row{"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME", "DESCRIPTION"})
 	t.SetColumnConfigs([]table.ColumnConfig{
 		{Number: 8, WidthMax: 40}, // 描述列限宽（默认 WidthMaxEnforcer=text.WrapText 换行）
 	})
@@ -82,7 +82,6 @@ func (e *Engine) Ps() error {
 			fields["MainPID"],
 			formatBytes(fields["MemoryCurrent"]),
 			up,
-			valueOrDash(fields["FragmentPath"]),
 			valueOrDash(svc.Description),
 		})
 	}

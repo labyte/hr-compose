@@ -14,6 +14,9 @@ import (
 type Config struct {
 	Version  string              `yaml:"version"`
 	Services map[string]*Service `yaml:"services"`
+	// ServiceOrder 记录 services 在 yml 中的声明顺序。map 本身不保序，
+	// Load 用 yaml.Node 保序读取后填入，engine 的启动/展示顺序以其为准。
+	ServiceOrder []string `yaml:"-"`
 }
 
 // Service 单个服务的编排配置。字段值直接透传 systemd 指令，不做语义翻译。
@@ -112,7 +115,51 @@ func Load(path string) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("校验 %s: %w", path, err)
 	}
+	if err := cfg.recordServiceOrder(string(b), path); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+// recordServiceOrder 从 yml 原文解析 services 的键声明顺序，填入 ServiceOrder。
+// 字段值与未知字段校验仍由结构体 Decode（KnownFields）把关，这里只取键名；
+// 重复键只记录首次出现，只记录实际生效（存在于 Services map）的键。
+func (c *Config) recordServiceOrder(src, path string) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(src), &doc); err != nil {
+		return fmt.Errorf("解析 %s: %w", path, err)
+	}
+	services := mappingValue(&doc, "services")
+	if services == nil || services.Kind != yaml.MappingNode {
+		return nil // services 缺失或非映射：Validate 已拦截，此处防御性跳过
+	}
+	seen := make(map[string]bool, len(c.Services))
+	c.ServiceOrder = make([]string, 0, len(c.Services))
+	for i := 0; i+1 < len(services.Content); i += 2 {
+		key := services.Content[i].Value
+		if _, ok := c.Services[key]; ok && !seen[key] {
+			seen[key] = true
+			c.ServiceOrder = append(c.ServiceOrder, key)
+		}
+	}
+	return nil
+}
+
+// mappingValue 在映射节点中查找键对应的值节点；自动解开 DocumentNode 包装。
+// 非映射或键不存在时返回 nil。
+func mappingValue(n *yaml.Node, key string) *yaml.Node {
+	for n.Kind == yaml.DocumentNode && len(n.Content) > 0 {
+		n = n.Content[0]
+	}
+	if n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
 }
 
 // Validate 执行 schema 校验。

@@ -50,7 +50,6 @@ func fakeShowFields() map[string]string {
 		"UnitFileState":                   "enabled",
 		"MainPID":                         "123",
 		"MemoryCurrent":                   "1048576",
-		"FragmentPath":                    "/etc/systemd/system/api.service",
 		"ExecMainStartTimestampMonotonic": "600000000",
 	}
 }
@@ -80,6 +79,54 @@ func TestOrderDependsFirst(t *testing.T) {
 	}
 	if len(got) != 3 {
 		t.Errorf("want 3 services, got %v", got)
+	}
+}
+
+func TestOrderFollowsDeclarationOrderWhenNoDeps(t *testing.T) {
+	// 无依赖关系时按 yml 声明顺序（ServiceOrder）输出，而非按名称排序
+	cfg := &config.Config{
+		Services: map[string]*config.Service{
+			"api": {Command: "/x/api"},
+			"web": {Command: "/x/web"},
+		},
+		ServiceOrder: []string{"web", "api"},
+	}
+	got := New(cfg, &fakeSys{}).order()
+	want := []string{"web", "api"}
+	if len(got) != len(want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("order[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestOrderDepsRespectedWithinDeclarationOrder(t *testing.T) {
+	// 声明顺序中 web 在前，但 web 依赖 api → api 仍必须先于 web
+	cfg := &config.Config{
+		Services: map[string]*config.Service{
+			"api": {Command: "/x/api"},
+			"web": {Command: "/x/web", DependsOn: []string{"api"}},
+		},
+		ServiceOrder: []string{"web", "api"},
+	}
+	got := New(cfg, &fakeSys{}).order()
+	idx := func(name string) int {
+		for i, n := range got {
+			if n == name {
+				return i
+			}
+		}
+		t.Fatalf("%s not in order %v", name, got)
+		return -1
+	}
+	if idx("api") > idx("web") {
+		t.Errorf("api should come before web (web depends on api): %v", got)
+	}
+	if len(got) != 2 {
+		t.Errorf("want 2 services, got %v", got)
 	}
 }
 
@@ -113,6 +160,37 @@ func TestUpWritesUnitsAndFollowsOrder(t *testing.T) {
 		if _, err := os.ReadFile(filepath.Join(UnitDir, name+".service")); err != nil {
 			t.Errorf("%s.service not written: %v", name, err)
 		}
+	}
+}
+
+func TestUpFollowsDeclarationOrderWithoutDeps(t *testing.T) {
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	fake := &fakeSys{}
+	// 声明顺序 web 在 api 前，且二者无依赖 → 按声明顺序 start
+	cfg := &config.Config{
+		Services: map[string]*config.Service{
+			"api": {Command: "/x/api"},
+			"web": {Command: "/x/web"},
+		},
+		ServiceOrder: []string{"web", "api"},
+	}
+	if err := New(cfg, fake).Up(); err != nil {
+		t.Fatal(err)
+	}
+	idx := func(s string) int {
+		for i, a := range fake.actions {
+			if a == s {
+				return i
+			}
+		}
+		t.Fatalf("action %q not executed, got %v", s, fake.actions)
+		return -1
+	}
+	if i, j := idx("start web.service"), idx("start api.service"); i > j {
+		t.Errorf("web should start before api (declaration order, no deps): %v", fake.actions)
 	}
 }
 

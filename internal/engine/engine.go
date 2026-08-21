@@ -134,13 +134,18 @@ func removeIfManaged(path string) error {
 	return os.Remove(path)
 }
 
-// order 返回按 depends_on 拓扑排序的服务名（依赖者在前）。迭代实现，避免深层依赖链栈溢出。
+// order 返回按 depends_on 拓扑排序的服务名（依赖者在前）。
+// 无依赖时按 yml 声明顺序（ServiceOrder）输出；声明顺序不可得（直接构造的 Config）时回退按名称排序，保证输出稳定。
 func (e *Engine) order() []string {
 	names := make([]string, 0, len(e.cfg.Services))
-	for n := range e.cfg.Services {
-		names = append(names, n)
+	if order := e.cfg.ServiceOrder; len(order) > 0 {
+		names = append(names, order...)
+	} else {
+		for n := range e.cfg.Services {
+			names = append(names, n)
+		}
+		sort.Strings(names) // 稳定输出顺序
 	}
-	sort.Strings(names) // 稳定输出顺序
 
 	var out []string
 	visited := make(map[string]bool)

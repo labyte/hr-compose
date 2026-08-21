@@ -117,7 +117,7 @@ services:
 然后（操作 `/etc/systemd/system`，`up`/`down` 需要 root）：
 
 ```bash
-sudo hr-compose up          # 生成 unit、enable + start，按依赖顺序启动
+sudo hr-compose up          # 生成 unit、enable + start；依赖者先启动，无依赖关系按 yml 声明顺序
 hr-compose ps               # 查看服务状态
 hr-compose logs api         # 查看日志（api 未配 std_output，默认 null → 提示 tail 业务日志）
 hr-compose logs redis       # 提示 tail 查看 redis 自己的日志文件
@@ -132,7 +132,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | 命令 | 说明 | 示例 |
 | --- | --- | --- |
 | `init` | 生成默认 `hr-compose.yml` 模板（已存在则不覆盖） | `hr-compose init` |
-| `up` | 生成 unit 并启动全部服务，遵循 `depends_on` 顺序；重复执行幂等，完成后自动展示各服务状态 | `sudo hr-compose up` |
+| `up` | 生成 unit 并启动全部服务：依赖者先启动，无依赖关系按 yml 声明顺序；重复执行幂等，完成后自动展示各服务状态 | `sudo hr-compose up` |
 | `start [name]` | 启动已安装的服务（不重生成 unit），不指定则全部；需先 `up` 过 | `sudo hr-compose start` |
 | `stop [name]` | 停止服务（保留 unit 与 enable，不删除），不指定则全部 | `sudo hr-compose stop api` |
 | `down` | 停止并清理全部服务，删除 unit 文件；若有 journal 日志服务则清空系统 journal | `sudo hr-compose down` |
@@ -140,9 +140,9 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | `restart [name]` | 重启指定服务，不指定则全部 | `sudo hr-compose restart api` |
 | `enable [name]` | 设置服务开机启动（仅 enable，不启停），不指定则全部 | `sudo hr-compose enable api` |
 | `disable [name]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
-| `ps` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / UPTIME 运行时长 / CONFIG 配置文件 / DESCRIPTION 描述列），内存自动转友好单位，终端下状态彩色显示 | `hr-compose ps` |
+| `ps` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / UPTIME 运行时长 / DESCRIPTION 描述列），内存自动转友好单位，终端下状态彩色显示 | `hr-compose ps` |
 | `logs [name] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发 | `hr-compose logs api -f` |
-| `config [name]` | 校验 yml 并打印生成的 unit 内容，可指定单个服务 | `hr-compose config api` |
+| `config [name]` | 校验 yml 并打印生成的 unit 内容（段头标注完整 unit 文件路径），可指定单个服务 | `hr-compose config api` |
 
 全局参数：`--file <path>` 指定编排文件（默认当前目录 `hr-compose.yml`）。注意 `-f` 是 `logs` 的 `--follow` 简写。
 
@@ -155,9 +155,10 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | **STATUS** | `ActiveState` + `SubState` + `LoadState` | 合并为单列人话状态：`not-found` 未安装（unit 文件不存在，含 `down` 后）/ `running` 运行中 / `exited` 已完成（oneshot 退出后保持）/ `waiting` 等待中（notify 未就绪）/ `stopped` 已停止（已安装但停止）/ `starting` 启动中 / `restarting` 自动重启中 / `stopping` 停止中 / `reloading` 重载中 / `failed` 失败；罕见组合回退为 `主/子` 两级展示 |
 | **ENABLED** | `UnitFileState` | 是否开机启动：`enabled` 已启用 / `disabled` 未启用 / `static` 等 |
 | **UPTIME** | `ExecMainStartTimestampMonotonic` | 主进程已运行时长（`45s` / `5m` / `2h` / `3d`）；服务重启后从头累计，可据此判断是否重启过；停止/失败/未启动的服务显示 `-` |
-| **CONFIG** | `FragmentPath` | systemd 实际加载的 unit 文件路径（如 `/etc/systemd/system/<服务名>.service`） |
 
 MEMORY 列为 systemd 报告的内存字节数，自动格式化为 `K / M / G` 友好单位（未统计时显示 `-`）。
+
+unit 实际文件路径不在此展示，用 `hr-compose config` 预览时会在段头标注完整路径（如 `/etc/systemd/system/<服务名>.service`）。
 
 开机启动状态用 `enable` / `disable` 命令修改（`up` 会自动 enable，`down` 会 disable）。
 

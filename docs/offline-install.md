@@ -121,20 +121,20 @@ services:
 ### 3.3 预览生成的 unit（可选，只读）
 
 ```bash
-hr-compose config                   # 校验 yml 并打印每个服务生成的 systemd unit 内容
+hr-compose config                   # 校验 yml 并打印每个服务生成的 systemd unit 内容（段头标注完整 unit 文件路径）
 hr-compose config api               # 只预览单个服务
 ```
 
 ### 3.4 启动服务
 
 ```bash
-sudo hr-compose up                  # 生成 unit 到 /etc/systemd/system、enable、按依赖顺序 start，完成后自动展示状态表
+sudo hr-compose up                  # 生成 unit 到 /etc/systemd/system、enable、start（依赖者先启动，无依赖按 yml 声明顺序），完成后自动展示状态表
 ```
 
 `up` 是幂等的：重复执行不会重复创建或报错，unit 内容没变化时是空操作。想单点看状态随时执行：
 
 ```bash
-hr-compose ps                       # 带边框状态表：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME / CONFIG / DESCRIPTION
+hr-compose ps                       # 带边框状态表：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME / DESCRIPTION
 ```
 
 ### 3.5 查看日志

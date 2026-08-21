@@ -21,8 +21,9 @@ func TestConfigFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := stdout.(*bytes.Buffer).String()
-	if !strings.Contains(out, "api.service") || strings.Contains(out, "redis.service") {
-		t.Errorf("Config(api) 应只包含 api.service\n%s", out)
+	// 段头应标注完整 unit 文件路径（UnitDir 默认 /etc/systemd/system）
+	if !strings.Contains(out, "/etc/systemd/system/api.service") || strings.Contains(out, "redis.service") {
+		t.Errorf("Config(api) 应只包含 api 的完整路径\n%s", out)
 	}
 	if !strings.Contains(out, "Description=API 服务") {
 		t.Errorf("应包含 api 的描述\n%s", out)
@@ -42,8 +43,10 @@ func TestConfigAll(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := stdout.(*bytes.Buffer).String()
-	if !strings.Contains(out, "api.service") || !strings.Contains(out, "redis.service") {
-		t.Errorf("Config() 应包含全部服务\n%s", out)
+	for _, want := range []string{"/etc/systemd/system/api.service", "/etc/systemd/system/redis.service"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Config() 应包含完整路径 %q\n%s", want, out)
+		}
 	}
 }
 

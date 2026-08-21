@@ -50,11 +50,11 @@ func (c *Real) Show(unit string) (map[string]string, error) {
 }
 
 // showProps 是 ps 需要的属性，ShowMany 用 -p 过滤以减少输出。
-// FragmentPath=实际 unit 文件路径，ExecMainStartTimestampMonotonic=主进程开机时刻（微秒，ps 计算运行时长用）。
+// ExecMainStartTimestampMonotonic=主进程开机时刻（微秒，ps 计算运行时长用）。
 // LoadState=unit 加载状态（not-found 表示未安装，ps 用于区分未安装与已停止）。
 var showProps = []string{
 	"Id", "ActiveState", "SubState", "LoadState", "UnitFileState", "MainPID", "MemoryCurrent",
-	"FragmentPath", "ExecMainStartTimestampMonotonic",
+	"ExecMainStartTimestampMonotonic",
 }
 
 // ShowMany 一次调用 systemctl show 读取多个 unit 的状态，按 unit 名（Id 字段）索引。

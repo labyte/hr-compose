@@ -36,6 +36,33 @@ services:
 	}
 }
 
+func TestLoadRecordsServiceOrder(t *testing.T) {
+	// 声明顺序与字母序相反（web > api > zzz），ServiceOrder 应按声明顺序记录
+	p := writeFixture(t, `
+services:
+  web:
+    command: /opt/myapp/web
+    depends_on: [api]
+  api:
+    command: /opt/myapp/api
+  zzz:
+    command: /opt/myapp/zzz
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"web", "api", "zzz"}
+	if len(cfg.ServiceOrder) != len(want) {
+		t.Fatalf("ServiceOrder = %v, want %v", cfg.ServiceOrder, want)
+	}
+	for i := range want {
+		if cfg.ServiceOrder[i] != want[i] {
+			t.Errorf("ServiceOrder[%d] = %q, want %q", i, cfg.ServiceOrder[i], want[i])
+		}
+	}
+}
+
 func TestRejectUnknownField(t *testing.T) {
 	p := writeFixture(t, `
 services:
