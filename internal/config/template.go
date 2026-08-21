@@ -28,16 +28,18 @@ const defaultTemplate = `# hr-compose.yml
 version: "1.0"
 
 services:
-  # 示例服务：取消注释并按需修改
-  # app:
-  #   description: 主业务 API 服务
-  #   command: /opt/myapp/app
-  #   working_dir: /opt/myapp
-  #   user: www
-  #   group: www
-  #   restart: on-failure
-  #   restart_sec: 5
-  #   std_output: journal
+  # 以下 api / web 两个服务为示例：演示最小配置与 depends_on 依赖写法，请按需修改或删除。
+  api:
+    description: 示例 API 服务
+    command: /opt/myapp/api
+    working_dir: /opt/myapp
+
+  web:
+    description: 示例 Web 服务
+    command: /opt/myapp/web
+    working_dir: /opt/myapp
+    depends_on:
+      - api        # web 依赖 api：up 时先启动 api，再启动 web
 `
 
 // Init 生成默认编排文件模板；文件已存在则不覆盖。

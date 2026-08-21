@@ -68,6 +68,8 @@ hr-compose --version               # 打印版本号
 hr-compose init                    # 生成默认 hr-compose.yml 模板（已存在则不覆盖）
 ```
 
+`init` 生成的模板默认包含 `api` / `web` 两个示例服务（最小配置，`web` 依赖 `api`），演示 `depends_on` 依赖写法，可直接按需修改或删除。
+
 ### 3.2 编辑 `hr-compose.yml`
 
 最小配置只写 描述 / 启动命令 / 工作目录 三个字段，其余走代码默认值：

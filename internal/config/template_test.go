@@ -17,10 +17,27 @@ func TestInitWritesTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(b)
-	for _, want := range []string{"version:", "services:", "command"} {
+	for _, want := range []string{
+		"version:", "services:", "api:", "web:", "command", "depends_on:", "示例",
+	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("模板缺少 %q\n%s", want, content)
 		}
+	}
+	// 生成的模板必须能通过 Load 校验：api / web 两个服务，web 依赖 api
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("生成的模板应能通过 Load 校验: %v", err)
+	}
+	if len(cfg.Services) != 2 {
+		t.Errorf("模板应有 2 个服务，实际 %d", len(cfg.Services))
+	}
+	if _, ok := cfg.Services["api"]; !ok {
+		t.Error("模板缺少 api 服务")
+	}
+	web := cfg.Services["web"]
+	if web == nil || len(web.DependsOn) != 1 || web.DependsOn[0] != "api" {
+		t.Errorf("web 服务应依赖 api，实际 DependsOn=%v", web.DependsOn)
 	}
 }
 
