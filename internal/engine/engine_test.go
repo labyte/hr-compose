@@ -41,13 +41,16 @@ func (f *fakeSys) ShowMany(units []string) (map[string]map[string]string, error)
 }
 
 // fakeShowFields 返回 fake 固定的 systemctl show 字段。
+// ExecMainStartTimestampMonotonic=600s（开机后 10 分钟启动主进程，配合 runPs 的 1h 开机时长得出 UPTIME=50m）。
 func fakeShowFields() map[string]string {
 	return map[string]string{
-		"ActiveState":   "active",
-		"SubState":      "running",
-		"UnitFileState": "enabled",
-		"MainPID":       "123",
-		"MemoryCurrent": "1048576",
+		"ActiveState":                     "active",
+		"SubState":                        "running",
+		"UnitFileState":                   "enabled",
+		"MainPID":                         "123",
+		"MemoryCurrent":                   "1048576",
+		"FragmentPath":                    "/etc/systemd/system/api.service",
+		"ExecMainStartTimestampMonotonic": "600000000",
 	}
 }
 

@@ -74,7 +74,7 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 - **`user` 省略时以执行 `up` 的用户运行**：`EffectiveUser()` 取 `SUDO_USER`（sudo 下）或当前用户。注意可复现性：同一 yml 被多人/CI 各自 `up` 会生成不同 `User=`（内容 hash 变 → 重写重启），共享编排建议显式 `user`。
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize。
 - **`ps` 的行为**：遍历 yml 中定义的服务逐个 `systemctl show`；unit 未加载时输出 `-` 空状态，不报错。
-- **`ps` 用 go-pretty 渲染**：`text/tabwriter` 或手动定宽会把 ANSI 转义码计入列宽导致错位，改用 `github.com/jedib0t/go-pretty/v6`（会剥离 ANSI 计算可见宽度，可安全把 `text.Colors.Sprint` 生成的彩色字符串直接作为单元格）。列：NAME / ACTIVE / SUB / ENABLED（`UnitFileState` 是否开机启动）/ PID / MEMORY / DESCRIPTION；状态列用 `stateColors` 着色、`formatBytes` 格式化内存、`valueOrDash` 处理空值。勿改回 tabwriter 上色。
+- **`ps` 用 go-pretty 渲染**：`text/tabwriter` 或手动定宽会把 ANSI 转义码计入列宽导致错位，改用 `github.com/jedib0t/go-pretty/v6`（会剥离 ANSI 计算可见宽度，可安全把 `text.Colors.Sprint` 生成的彩色字符串直接作为单元格）。列：NAME / STATUS（`mergedState` 合并 `ActiveState`+`SubState`）/ ENABLED（`UnitFileState` 是否开机启动）/ PID / MEMORY / UPTIME（`ExecMainStartTimestampMonotonic` 减 `/proc/uptime` 算出主进程运行时长，`uptimeSince`+`formatUptime` 格式化，仅 `runningStates` 内状态展示）/ CONFIG（`FragmentPath` 实际 unit 文件路径）/ DESCRIPTION；状态列用 `stateColors` 着色、`formatBytes` 格式化内存、`valueOrDash` 处理空值。勿改回 tabwriter 上色。
 - **`logs` 的分发**：按 `std_output` 值分流——`journal` 执行 `journalctl -u <svc>.service`（`-f` 跟随）；`file:<p>` / `append:<p>` 执行 `tail` 查看（文件不存在给提示）；未配置（默认 null）与 `none`（旧写法）只打印 `tail` 提示。`log_file` 字段仅用于 null 模式的 tail 提示，不参与 systemd 配置。
 - **journal 清理是全局的**：journald 不支持按 unit 删除日志，`down`（存在显式 `std_output: journal` 服务时；默认 null 不触发）与 `clean [name]` 对 journal 服务执行 `journalctl --rotate` + `--vacuum-size=1`，清空**整个系统 journal**（非仅 hr-compose 服务的日志）。`clean` 对 `file:`/`append:` 服务截断对应文件、`null` 仅提示。
 

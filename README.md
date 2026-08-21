@@ -140,7 +140,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | `restart [name]` | 重启指定服务，不指定则全部 | `sudo hr-compose restart api` |
 | `enable [name]` | 设置服务开机启动（仅 enable，不启停），不指定则全部 | `sudo hr-compose enable api` |
 | `disable [name]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
-| `ps` | 带边框列出服务状态表（含 ENABLED 开机启动 / DESCRIPTION 描述列），内存自动转友好单位，终端下状态彩色显示 | `hr-compose ps` |
+| `ps` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / UPTIME 运行时长 / CONFIG 配置文件 / DESCRIPTION 描述列），内存自动转友好单位，终端下状态彩色显示 | `hr-compose ps` |
 | `logs [name] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发 | `hr-compose logs api -f` |
 | `config [name]` | 校验 yml 并打印生成的 unit 内容，可指定单个服务 | `hr-compose config api` |
 
@@ -148,13 +148,14 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 
 ### ps 状态列说明
 
-`hr-compose ps` 的两列状态来自 systemd：
+`hr-compose ps` 的状态列来自 systemd：
 
 | 列 | 对应 systemd | 含义 |
 | --- | --- | --- |
-| **ACTIVE** | `ActiveState` | 生命周期总状态：`active` 运行 / `inactive` 未运行 / `activating` 启动中 / `deactivating` 停止中 / `failed` 失败 / `reloading` 重载中 |
-| **SUB** | `SubState` | 动作子状态：`running` 运行 / `exited` 已退出 / `dead` 已停止 / `listening` 监听中 / `auto-restart` 自动重启等 |
+| **STATUS** | `ActiveState` + `SubState` | 两级状态合并：`active` 运行 / `inactive` 未运行 / `failed` 失败 / `restarting` 自动重启中 / `activating/start` 启动中 / `deactivating` 停止中 / `reloading` 重载中；子状态与主状态重合或为默认值时省略（如 `active` 的 `running`、`inactive` 的 `dead`），特殊组合保留 `主/子` 完整展示 |
 | **ENABLED** | `UnitFileState` | 是否开机启动：`enabled` 已启用 / `disabled` 未启用 / `static` 等 |
+| **UPTIME** | `ExecMainStartTimestampMonotonic` | 主进程已运行时长（`45s` / `5m` / `2h` / `3d`）；服务重启后从头累计，可据此判断是否重启过；停止/失败/未启动的服务显示 `-` |
+| **CONFIG** | `FragmentPath` | systemd 实际加载的 unit 文件路径（如 `/etc/systemd/system/<服务名>.service`） |
 
 MEMORY 列为 systemd 报告的内存字节数，自动格式化为 `K / M / G` 友好单位（未统计时显示 `-`）。
 

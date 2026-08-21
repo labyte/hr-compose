@@ -50,7 +50,11 @@ func (c *Real) Show(unit string) (map[string]string, error) {
 }
 
 // showProps 是 ps 需要的属性，ShowMany 用 -p 过滤以减少输出。
-var showProps = []string{"Id", "ActiveState", "SubState", "UnitFileState", "MainPID", "MemoryCurrent"}
+// FragmentPath=实际 unit 文件路径，ExecMainStartTimestampMonotonic=主进程开机时刻（微秒，ps 计算运行时长用）。
+var showProps = []string{
+	"Id", "ActiveState", "SubState", "UnitFileState", "MainPID", "MemoryCurrent",
+	"FragmentPath", "ExecMainStartTimestampMonotonic",
+}
 
 // ShowMany 一次调用 systemctl show 读取多个 unit 的状态，按 unit 名（Id 字段）索引。
 // 部分 unit 未加载时 systemctl 退出码非 0 但仍输出其余 unit 的块，此处解析可用部分；
