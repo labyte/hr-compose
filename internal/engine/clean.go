@@ -6,17 +6,17 @@ import (
 	"strings"
 )
 
-// ClearLogs 清除指定服务的日志，name 为空则全部：
+// ClearLogs 清除指定服务的日志，names 为空则全部：
 //   - journal       → 清空整个系统 journal（journald 不支持按 unit 删除，多个服务只清一次）
 //   - file:/append: → 截断对应日志文件
 //   - null          → 日志由业务程序管理，提示自行处理
-func (e *Engine) ClearLogs(name string) error {
-	names, err := e.resolve(name)
+func (e *Engine) ClearLogs(names ...string) error {
+	targets, err := e.resolve(names...)
 	if err != nil {
 		return err
 	}
 	cleared := false
-	for _, n := range names {
+	for _, n := range targets {
 		svc := e.cfg.Services[n]
 		switch out := svc.EffectiveStdOutput(); {
 		case out == "journal":

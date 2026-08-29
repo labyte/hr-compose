@@ -33,12 +33,16 @@ func (e *Engine) unitName(n string) string {
 	return unit.Name(e.cfg.Name, n)
 }
 
-// Up 生成、enable 并按依赖顺序 start 全部服务。
-func (e *Engine) Up() error {
-	names := e.order()
+// Up 生成、enable 并按依赖顺序 start 服务。
+// 指定名字时自动带上其 depends_on 依赖（递归），保证依赖先安装先启动；不指定则全部。
+func (e *Engine) Up(names ...string) error {
+	targets, err := e.upTargets(names)
+	if err != nil {
+		return err
+	}
 
-	// 第一趟：生成并写入全部 unit（幂等，仅在内容变化时重写），期间不 reload
-	for _, name := range names {
+	// 第一趟：生成并写入全部 target 的 unit（幂等，仅在内容变化时重写），期间不 reload
+	for _, name := range targets {
 		g, err := unit.Generate(name, e.cfg.Services[name], e.cfg.Name)
 		if err != nil {
 			return err
@@ -52,7 +56,7 @@ func (e *Engine) Up() error {
 		return err
 	}
 	// 第二趟：按依赖顺序 enable + start
-	for _, name := range names {
+	for _, name := range targets {
 		g, err := unit.Generate(name, e.cfg.Services[name], e.cfg.Name)
 		if err != nil {
 			return err
@@ -68,12 +72,50 @@ func (e *Engine) Up() error {
 	return nil
 }
 
-// Down 逆序 stop、disable 并删除 unit 文件（仅删除带托管标记的文件）。
-// 若编排中存在使用 journal 日志的服务，清理整个 journal（journald 不支持按 unit 删除）。
-func (e *Engine) Down() error {
-	names := e.order()
-	for i := len(names) - 1; i >= 0; i-- {
-		name := names[i]
+// upTargets 解析 up 的目标集并补齐依赖闭包：
+//   - 无参数 → 全部服务（拓扑序，与旧行为一致）
+//   - 有参数 → 校验名字后，取这些服务及其 depends_on 的传递闭包，再拓扑排序，
+//     保证首次 `up <服务>` 时依赖也一并安装并先启动（docker-compose 语义）。
+func (e *Engine) upTargets(names []string) ([]string, error) {
+	if len(names) == 0 {
+		return e.order(e.allNames()), nil
+	}
+	if _, err := e.resolve(names...); err != nil {
+		return nil, err // 未定义的名字直接报错
+	}
+	inSet := make(map[string]bool)
+	var visit func(string)
+	visit = func(n string) {
+		if inSet[n] {
+			return
+		}
+		inSet[n] = true
+		for _, d := range e.cfg.Services[n].DependsOn {
+			visit(d)
+		}
+	}
+	for _, n := range names {
+		visit(n)
+	}
+	subset := make([]string, 0, len(inSet))
+	for _, n := range e.allNames() { // 声明顺序为基准，保证输出稳定
+		if inSet[n] {
+			subset = append(subset, n)
+		}
+	}
+	return e.order(subset), nil
+}
+
+// Down 逆序 stop、disable 并删除指定服务的 unit 文件（仅删除带托管标记的文件），
+// 只清理指定服务、不连带其依赖；不指定则全部。
+// 若目标服务中存在使用 journal 日志的服务，清理整个 journal（journald 不支持按 unit 删除）。
+func (e *Engine) Down(names ...string) error {
+	targets, err := e.resolve(names...)
+	if err != nil {
+		return err
+	}
+	for i := len(targets) - 1; i >= 0; i-- {
+		name := targets[i]
 		u := e.unitName(name)
 		_ = e.sys.Stop(u)    // 未运行时报错可忽略
 		_ = e.sys.Disable(u) // 未 enable 时报错可忽略
@@ -85,7 +127,7 @@ func (e *Engine) Down() error {
 	if err := e.sys.DaemonReload(); err != nil {
 		return err
 	}
-	if e.anyJournal() {
+	if e.anyJournal(targets) {
 		if err := e.sys.ClearJournal(); err != nil {
 			return fmt.Errorf("清理 journal 日志: %w", err)
 		}
@@ -94,10 +136,10 @@ func (e *Engine) Down() error {
 	return nil
 }
 
-// anyJournal 判断编排中是否存在使用 journal 日志输出的服务。
-func (e *Engine) anyJournal() bool {
-	for _, svc := range e.cfg.Services {
-		if svc.EffectiveStdOutput() == "journal" {
+// anyJournal 判断目标服务中是否存在使用 journal 日志输出的服务。
+func (e *Engine) anyJournal(names []string) bool {
+	for _, n := range names {
+		if e.cfg.Services[n].EffectiveStdOutput() == "journal" {
 			return true
 		}
 	}
@@ -140,9 +182,9 @@ func removeIfManaged(path string) error {
 	return os.Remove(path)
 }
 
-// order 返回按 depends_on 拓扑排序的服务名（依赖者在前）。
-// 无依赖时按 yml 声明顺序（ServiceOrder）输出；声明顺序不可得（直接构造的 Config）时回退按名称排序，保证输出稳定。
-func (e *Engine) order() []string {
+// allNames 返回全部服务名的稳定基准顺序：yml 声明顺序（ServiceOrder）；
+// 声明顺序不可得（直接构造的 Config）时回退按名称排序，保证输出稳定。
+func (e *Engine) allNames() []string {
 	names := make([]string, 0, len(e.cfg.Services))
 	if order := e.cfg.ServiceOrder; len(order) > 0 {
 		names = append(names, order...)
@@ -151,6 +193,16 @@ func (e *Engine) order() []string {
 			names = append(names, n)
 		}
 		sort.Strings(names) // 稳定输出顺序
+	}
+	return names
+}
+
+// order 对给定服务名做 depends_on 拓扑排序（依赖者在前），子集外的依赖忽略（视为已满足）。
+// 输入顺序作为无依赖服务的基准顺序。
+func (e *Engine) order(names []string) []string {
+	inSet := make(map[string]bool, len(names))
+	for _, n := range names {
+		inSet[n] = true
 	}
 
 	var out []string
@@ -179,7 +231,7 @@ func (e *Engine) order() []string {
 				pushed := false
 				for i := len(deps) - 1; i >= 0; i-- {
 					d := deps[i]
-					if !visited[d] && !inStack[d] {
+					if inSet[d] && !visited[d] && !inStack[d] {
 						stack = append(stack, d)
 						pushed = true
 					}
@@ -197,13 +249,28 @@ func (e *Engine) order() []string {
 	return out
 }
 
-// resolve 把可选的 name 参数解析为服务名列表，空值表示全部。
-func (e *Engine) resolve(name string) ([]string, error) {
-	if name == "" {
-		return e.order(), nil
+// resolve 把可选的服务名解析为有序目标列表：
+//   - 无参数 → 全部服务（拓扑序，依赖者在前）
+//   - 有参数 → 校验每个名字已定义（未定义一次全部列出）、去重保序、在子集内拓扑排序
+func (e *Engine) resolve(names ...string) ([]string, error) {
+	if len(names) == 0 {
+		return e.order(e.allNames()), nil
 	}
-	if _, ok := e.cfg.Services[name]; !ok {
-		return nil, fmt.Errorf("服务 %q 未在编排文件中定义", name)
+	var missing []string
+	seen := make(map[string]bool, len(names))
+	subset := make([]string, 0, len(names))
+	for _, n := range names {
+		if _, ok := e.cfg.Services[n]; !ok {
+			missing = append(missing, n)
+			continue
+		}
+		if !seen[n] {
+			seen[n] = true
+			subset = append(subset, n)
+		}
 	}
-	return []string{name}, nil
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("服务 %q 未在编排文件中定义", strings.Join(missing, `", "`))
+	}
+	return e.order(subset), nil
 }

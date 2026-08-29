@@ -171,15 +171,17 @@ sudo hr-compose down                # 逆序停止所有服务、disable、删�
 | 命令 | 说明 | 是否需要 root |
 | --- | --- | --- |
 | `init` | 生成默认 `hr-compose.yml` 模板 | 否 |
-| `config [name]` | 校验 yml、预览生成的 unit | 否 |
-| `up` | 生成 unit + enable + start（幂等） | 是 |
+| `config [name...]` | 校验 yml、预览生成的 unit | 否 |
+| `up [name...]` | 生成 unit + enable + start（幂等；指定名字时带上其依赖） | 是 |
 | `ps` | 查看服务状态表 | 否 |
-| `logs [name] [-f]` | 查看日志（`-f` 实时跟踪） | 否 |
-| `restart [name]` | 重启服务 | 是 |
-| `stop [name]` / `start [name]` | 停 / 启服务（保留 unit） | 是 |
-| `enable [name]` / `disable [name]` | 设置 / 取消开机启动 | 是 |
-| `clean [name]` | 清除服务日志 | 是 |
-| `down` | 停止并清理全部服务、删除 unit | 是 |
+| `logs [name...] [-f]` | 查看日志（`-f` 实时跟踪） | 否 |
+| `restart [name...]` | 重启服务 | 是 |
+| `stop [name...]` / `start [name...]` | 停 / 启服务（保留 unit） | 是 |
+| `enable [name...]` / `disable [name...]` | 设置 / 取消开机启动 | 是 |
+| `clean [name...]` | 清除服务日志 | 是 |
+| `down [name...]` | 停止并清理指定服务、删除 unit（只清理指定的） | 是 |
+
+> 所有接受服务名的命令都支持一次指定多个（`[name...]`），不指定则作用于全部。
 
 全局参数 `--file <path>` 可指定编排文件路径（默认当前目录 `hr-compose.yml`）。
 

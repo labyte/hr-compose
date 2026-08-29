@@ -13,7 +13,7 @@ func TestEnableAll(t *testing.T) {
 		"api":   {Command: "/x/api"},
 		"redis": {Command: "/x/redis"},
 	}}
-	if err := New(cfg, fake).Enable(""); err != nil {
+	if err := New(cfg, fake).Enable(); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"enable api.service", "enable redis.service"} {

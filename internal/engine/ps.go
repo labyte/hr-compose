@@ -31,7 +31,7 @@ func (e *Engine) Ps() error {
 	})
 	t.SetStyle(table.StyleLight)
 
-	names := e.order()
+	names := e.order(e.allNames())
 	unitNames := make([]string, len(names))
 	for i, n := range names {
 		unitNames[i] = e.unitName(n)

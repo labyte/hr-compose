@@ -19,7 +19,7 @@ func TestConfigFilter(t *testing.T) {
 		"api":   {Command: "/x/api", Description: "API 服务"},
 		"redis": {Command: "/x/redis"},
 	}}
-	if err := New(cfg, &fakeSys{}).Config("api", false); err != nil {
+	if err := New(cfg, &fakeSys{}).Config([]string{"api"}, false); err != nil {
 		t.Fatal(err)
 	}
 	out := stdout.(*bytes.Buffer).String()
@@ -44,7 +44,7 @@ func TestConfigAll(t *testing.T) {
 		"api":   {Command: "/x/api"},
 		"redis": {Command: "/x/redis"},
 	}}
-	if err := New(cfg, &fakeSys{}).Config("", false); err != nil {
+	if err := New(cfg, &fakeSys{}).Config(nil, false); err != nil {
 		t.Fatal(err)
 	}
 	out := stdout.(*bytes.Buffer).String()
@@ -72,7 +72,7 @@ func TestConfigRealShowsOnDiskFile(t *testing.T) {
 	cfg := &config.Config{Services: map[string]*config.Service{
 		"api": {Command: "/x/api"},
 	}}
-	if err := New(cfg, &fakeSys{}).Config("api", true); err != nil {
+	if err := New(cfg, &fakeSys{}).Config([]string{"api"}, true); err != nil {
 		t.Fatal(err)
 	}
 	out := stdout.(*bytes.Buffer).String()
@@ -99,7 +99,7 @@ func TestConfigRealFileMissing(t *testing.T) {
 	cfg := &config.Config{Services: map[string]*config.Service{
 		"api": {Command: "/x/api"},
 	}}
-	if err := New(cfg, &fakeSys{}).Config("api", true); err != nil {
+	if err := New(cfg, &fakeSys{}).Config([]string{"api"}, true); err != nil {
 		t.Fatal(err)
 	}
 	out := stdout.(*bytes.Buffer).String()
@@ -115,7 +115,7 @@ func TestConfigUnknownService(t *testing.T) {
 	cfg := &config.Config{Services: map[string]*config.Service{
 		"api": {Command: "/x/api"},
 	}}
-	if err := New(cfg, &fakeSys{}).Config("nope", false); err == nil {
+	if err := New(cfg, &fakeSys{}).Config([]string{"nope"}, false); err == nil {
 		t.Error("未知服务名应报错")
 	}
 }

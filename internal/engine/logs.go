@@ -9,16 +9,16 @@ import (
 	"hr.compose/internal/config"
 )
 
-// Logs 按服务 std_output 分发查看命令：
+// Logs 按服务 std_output 分发查看命令，names 为空（nil/空切片）则全部：
 //   - journal            → 执行 journalctl（-u <unitName>，unit 名带 project 前缀）
 //   - file:<p>/append:<p> → 执行 tail 查看对应日志文件
 //   - null               → 提示用 tail 查看业务日志
-func (e *Engine) Logs(name string, follow bool) error {
-	names, err := e.resolve(name)
+func (e *Engine) Logs(names []string, follow bool) error {
+	targets, err := e.resolve(names...)
 	if err != nil {
 		return err
 	}
-	for _, n := range names {
+	for _, n := range targets {
 		if err := dispatchLogs(n, e.unitName(n), e.cfg.Services[n], follow); err != nil {
 			return err
 		}

@@ -64,7 +64,7 @@ func TestOrderDependsFirst(t *testing.T) {
 		"db":    {Command: "/x/db"},
 	}}
 	e := New(cfg, &fakeSys{})
-	got := e.order()
+	got := e.order(e.allNames())
 	idx := func(name string) int {
 		for i, n := range got {
 			if n == name {
@@ -92,7 +92,8 @@ func TestOrderFollowsDeclarationOrderWhenNoDeps(t *testing.T) {
 		},
 		ServiceOrder: []string{"web", "api"},
 	}
-	got := New(cfg, &fakeSys{}).order()
+	e := New(cfg, &fakeSys{})
+	got := e.order(e.allNames())
 	want := []string{"web", "api"}
 	if len(got) != len(want) {
 		t.Fatalf("order = %v, want %v", got, want)
@@ -113,7 +114,8 @@ func TestOrderDepsRespectedWithinDeclarationOrder(t *testing.T) {
 		},
 		ServiceOrder: []string{"web", "api"},
 	}
-	got := New(cfg, &fakeSys{}).order()
+	e := New(cfg, &fakeSys{})
+	got := e.order(e.allNames())
 	idx := func(name string) int {
 		for i, n := range got {
 			if n == name {
@@ -252,6 +254,126 @@ func TestResolveUnknownService(t *testing.T) {
 	e := New(cfg, &fakeSys{})
 	if _, err := e.resolve("nope"); err == nil {
 		t.Error("want error for unknown service")
+	}
+}
+
+func TestResolveMultipleAndDedup(t *testing.T) {
+	// 多个名字：校验存在、去重并保持输入顺序（无依赖时直接按输入顺序输出）
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api":   {Command: "/x/api"},
+		"redis": {Command: "/x/redis"},
+	}}
+	got, err := New(cfg, &fakeSys{}).resolve("redis", "api", "redis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"redis", "api"}
+	if len(got) != len(want) {
+		t.Fatalf("resolve = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("resolve[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestResolveUnknownMultiple(t *testing.T) {
+	// 未定义的名字一次全部列出
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api": {Command: "/x/api"},
+	}}
+	_, err := New(cfg, &fakeSys{}).resolve("nope", "foo")
+	if err == nil {
+		t.Fatal("未知服务名应报错")
+	}
+	for _, n := range []string{"nope", "foo"} {
+		if !strings.Contains(err.Error(), n) {
+			t.Errorf("错误信息应列出未定义的服务 %q: %v", n, err)
+		}
+	}
+}
+
+func TestOrderSubsetIgnoresDepsOutside(t *testing.T) {
+	// 子集内服务依赖子集外服务时，子集外依赖忽略（视为已满足），
+	// 使 `start web` 只返回 [web] 而非连带其依赖。
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api": {Command: "/x/api"},
+		"web": {Command: "/x/web", DependsOn: []string{"api"}},
+	}}
+	got := New(cfg, &fakeSys{}).order([]string{"web"})
+	if len(got) != 1 || got[0] != "web" {
+		t.Errorf("order([web]) = %v, want 仅 [web]", got)
+	}
+}
+
+func TestUpSubsetIncludesDependencies(t *testing.T) {
+	// up 指定服务时自动带上其 depends_on 依赖（递归），且不触碰无关服务
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	fake := &fakeSys{}
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api":   {Command: "/x/api", DependsOn: []string{"redis"}},
+		"redis": {Command: "/x/redis"},
+		"web":   {Command: "/x/web"}, // 与 api 无关，不应被启动
+	}}
+	if err := New(cfg, fake).Up("api"); err != nil {
+		t.Fatal(err)
+	}
+	idx := func(s string) int {
+		for i, a := range fake.actions {
+			if a == s {
+				return i
+			}
+		}
+		return -1
+	}
+	// 闭包：api 的依赖 redis 一并写入并先启动
+	if i, j := idx("start redis.service"), idx("start api.service"); i == -1 || j == -1 || i > j {
+		t.Errorf("redis 应先于 api 启动（Up(api) 带上依赖）: %v", fake.actions)
+	}
+	for _, name := range []string{"api", "redis"} {
+		if _, err := os.Stat(filepath.Join(UnitDir, name+".service")); err != nil {
+			t.Errorf("%s.service 应被写入: %v", name, err)
+		}
+	}
+	// 无关服务 web 不被写入也不被启动
+	if _, err := os.Stat(filepath.Join(UnitDir, "web.service")); !os.IsNotExist(err) {
+		t.Errorf("Up(api) 不应写入无关的 web.service")
+	}
+	if idx("start web.service") != -1 {
+		t.Errorf("Up(api) 不应启动无关的 web: %v", fake.actions)
+	}
+}
+
+func TestDownSubsetRemovesOnlyNamed(t *testing.T) {
+	// down 指定服务只清理指定的，不连带其依赖；依赖的 unit 保留
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	fake := &fakeSys{}
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api":   {Command: "/x/api", DependsOn: []string{"redis"}},
+		"redis": {Command: "/x/redis"},
+	}}
+	e := New(cfg, fake)
+	if err := e.Up(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Down("api"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(UnitDir, "api.service")); !os.IsNotExist(err) {
+		t.Errorf("api.service 应被删除: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(UnitDir, "redis.service")); err != nil {
+		t.Errorf("Down(api) 不应删除依赖 redis.service: %v", err)
+	}
+	if containsAction(fake.actions, "stop redis.service") {
+		t.Errorf("Down(api) 不应 stop 依赖 redis: %v", fake.actions)
 	}
 }
 

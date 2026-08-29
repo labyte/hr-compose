@@ -133,17 +133,19 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | 命令 | 说明 | 示例 |
 | --- | --- | --- |
 | `init` | 生成默认 `hr-compose.yml` 模板（已存在则不覆盖） | `hr-compose init` |
-| `up` | 生成 unit 并启动全部服务：依赖者先启动，无依赖关系按 yml 声明顺序；重复执行幂等，完成后自动展示各服务状态 | `sudo hr-compose up` |
-| `start [name]` | 启动已安装的服务（不重生成 unit），不指定则全部；需先 `up` 过 | `sudo hr-compose start` |
-| `stop [name]` | 停止服务（保留 unit 与 enable，不删除），不指定则全部 | `sudo hr-compose stop api` |
-| `down` | 停止并清理全部服务，删除 unit 文件；若有 journal 日志服务则清空系统 journal | `sudo hr-compose down` |
-| `clean [name]` | 清除服务日志（journal 清空 / file 截断），不指定则全部 | `sudo hr-compose clean api` |
-| `restart [name]` | 重启指定服务，不指定则全部 | `sudo hr-compose restart api` |
-| `enable [name]` | 设置服务开机启动（仅 enable，不启停），不指定则全部 | `sudo hr-compose enable api` |
-| `disable [name]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
+| `up [name...]` | 生成 unit 并启动服务：指定名字时自动带上其 `depends_on` 依赖（递归），不指定则全部；依赖者先启动，无依赖关系按 yml 声明顺序；重复执行幂等，完成后自动展示各服务状态 | `sudo hr-compose up web` |
+| `start [name...]` | 启动已安装的服务（不重生成 unit），不指定则全部；需先 `up` 过 | `sudo hr-compose start api web` |
+| `stop [name...]` | 停止服务（保留 unit 与 enable，不删除），不指定则全部 | `sudo hr-compose stop api` |
+| `down [name...]` | 停止并清理指定服务，删除 unit 文件；只清理指定的、不连带其依赖，目标含 journal 日志服务时清空系统 journal | `sudo hr-compose down web` |
+| `clean [name...]` | 清除服务日志（journal 清空 / file 截断），不指定则全部 | `sudo hr-compose clean api` |
+| `restart [name...]` | 重启指定服务，不指定则全部 | `sudo hr-compose restart api web` |
+| `enable [name...]` | 设置服务开机启动（仅 enable，不启停），不指定则全部 | `sudo hr-compose enable api` |
+| `disable [name...]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
 | `ps` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / UPTIME 运行时长 / DESCRIPTION 描述列），内存自动转友好单位，终端下状态彩色显示 | `hr-compose ps` |
-| `logs [name] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发 | `hr-compose logs api -f` |
-| `config [name] [--real]` | 校验 yml 并打印 service 内容，可指定单个服务：默认打印生成的 unit 预览（段头标注"预览"与完整 unit 文件路径）；`--real` 读取磁盘上实际的 unit 文件（段头标注"实际文件"，文件不存在时给出提示，可用于对比预览与实际差异） | `hr-compose config api --real` |
+| `logs [name...] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发（多个服务逐个查看） | `hr-compose logs api -f` |
+| `config [name...] [--real]` | 校验 yml 并打印 service 内容：默认打印生成的 unit 预览（段头标注"预览"与完整 unit 文件路径）；`--real` 读取磁盘上实际的 unit 文件（段头标注"实际文件"，文件不存在时给出提示，可用于对比预览与实际差异） | `hr-compose config api --real` |
+
+> 所有接受服务名的命令（`up`/`down`/`start`/`stop`/`restart`/`enable`/`disable`/`clean`/`logs`/`config`）都支持一次指定多个服务，如 `hr-compose restart api web`；不指定则作用于全部。`up` 指定服务会**自动带上其 `depends_on` 依赖**（docker-compose 风格，首次 `up web` 会连 `api` 一起安装启动）；`down` 指定服务**只清理指定的**，不连带依赖，需连带清理时显式列出。
 
 全局参数：`--file <path>` 指定编排文件（默认当前目录 `hr-compose.yml`）。注意 `-f` 是 `logs` 的 `--follow` 简写。
 
@@ -260,7 +262,7 @@ services:
 
 > `file:` / `append:` 的文件由 systemd 以 `User=` 身份打开，需保证目录对该用户可写；`file:` 会截断已有文件。
 >
-> **日志清理**：`down` 会清空系统 journal（若编排中存在 journal 服务）；`clean [name]` 可手动清除日志（journal 清空 / file 截断 / null 提示）。注意 journald 不支持按 unit 删除，清空的是**整个系统 journal**。
+> **日志清理**：`down` 只对本次清理的目标服务判断 journal——目标含 journal 服务时才清空系统 journal（指定子集时不会因其他服务的 journal 而误清）；`clean [name...]` 可手动清除日志（journal 清空 / file 截断 / null 提示）。注意 journald 不支持按 unit 删除，清空的是**整个系统 journal**。
 
 ---
 

@@ -12,7 +12,7 @@ func TestStartFollowsDependencyOrder(t *testing.T) {
 		"api":   {Command: "/x/api", DependsOn: []string{"redis"}},
 		"redis": {Command: "/x/redis"},
 	}}
-	if err := New(cfg, fake).Start(""); err != nil {
+	if err := New(cfg, fake).Start(); err != nil {
 		t.Fatal(err)
 	}
 	idx := func(s string) int {
@@ -35,7 +35,7 @@ func TestStopReverseOrder(t *testing.T) {
 		"api":   {Command: "/x/api", DependsOn: []string{"redis"}},
 		"redis": {Command: "/x/redis"},
 	}}
-	if err := New(cfg, fake).Stop(""); err != nil {
+	if err := New(cfg, fake).Stop(); err != nil {
 		t.Fatal(err)
 	}
 	idx := func(s string) int {
@@ -70,5 +70,47 @@ func TestStartStopSingleName(t *testing.T) {
 	}
 	if len(fake.actions) != 1 || fake.actions[0] != "stop api.service" {
 		t.Errorf("Stop(api) = %v, want 仅 stop api.service", fake.actions)
+	}
+}
+
+func TestStartMultipleNames(t *testing.T) {
+	// 无依赖服务按输入顺序启动
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api":   {Command: "/x/api"},
+		"redis": {Command: "/x/redis"},
+	}}
+	fake := &fakeSys{}
+	if err := New(cfg, fake).Start("redis", "api"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"start redis.service", "start api.service"}
+	if len(fake.actions) != len(want) {
+		t.Fatalf("Start(redis, api) actions = %v, want %v", fake.actions, want)
+	}
+	for i := range want {
+		if fake.actions[i] != want[i] {
+			t.Errorf("actions[%d] = %q, want %q", i, fake.actions[i], want[i])
+		}
+	}
+}
+
+func TestStopMultipleReverseDependency(t *testing.T) {
+	// api 依赖 redis：stop 时依赖者 api 先停，再停 redis
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api":   {Command: "/x/api", DependsOn: []string{"redis"}},
+		"redis": {Command: "/x/redis"},
+	}}
+	fake := &fakeSys{}
+	if err := New(cfg, fake).Stop("api", "redis"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"stop api.service", "stop redis.service"}
+	if len(fake.actions) != len(want) {
+		t.Fatalf("Stop(api, redis) actions = %v, want %v", fake.actions, want)
+	}
+	for i := range want {
+		if fake.actions[i] != want[i] {
+			t.Errorf("actions[%d] = %q, want %q", i, fake.actions[i], want[i])
+		}
 	}
 }

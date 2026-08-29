@@ -11,7 +11,8 @@ import (
 	"hr.compose/internal/config"
 )
 
-// serviceCompletion 提供服务名补全：从编排文件加载已定义的服务名，供各 [name] 子命令使用。
+// serviceCompletion 提供服务名补全：从编排文件加载已定义的服务名（过滤已输入的名字），
+// 供各 [name...] 子命令的多参数补全使用。
 func serviceCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	path := cfgFile
 	if path == "" {
@@ -22,9 +23,15 @@ func serviceCompletion(cmd *cobra.Command, args []string, toComplete string) ([]
 		// 编排文件缺失/非法时不做补全
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
+	used := make(map[string]bool, len(args))
+	for _, a := range args {
+		used[a] = true
+	}
 	names := make([]string, 0, len(cfg.Services))
 	for n := range cfg.Services {
-		names = append(names, n)
+		if !used[n] {
+			names = append(names, n)
+		}
 	}
 	return names, cobra.ShellCompDirectiveNoFileComp
 }

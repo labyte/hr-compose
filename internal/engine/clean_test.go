@@ -34,6 +34,36 @@ func TestDownSkipsJournalWhenNoJournalService(t *testing.T) {
 	}
 }
 
+func TestDownSubsetSkipsJournalWhenNamedNotJournal(t *testing.T) {
+	// down 指定服务只对目标集判断 journal：目标 api 非 journal，不应因其他服务的 journal 清空整个系统 journal
+	fake := &fakeSys{}
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api":   {Command: "/x/api", StdOutput: "file:/var/log/api.log"},
+		"redis": {Command: "/x/redis", StdOutput: "journal"},
+	}}
+	if err := New(cfg, fake).Down("api"); err != nil {
+		t.Fatal(err)
+	}
+	if containsAction(fake.actions, "clear-journal") {
+		t.Errorf("Down(api) 不应因 redis 的 journal 清空 journal: %v", fake.actions)
+	}
+}
+
+func TestDownSubsetClearsJournalWhenNamedJournal(t *testing.T) {
+	// 目标集内存在 journal 服务时才清理
+	fake := &fakeSys{}
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api":   {Command: "/x/api", StdOutput: "journal"},
+		"redis": {Command: "/x/redis", StdOutput: "file:/var/log/redis.log"},
+	}}
+	if err := New(cfg, fake).Down("api"); err != nil {
+		t.Fatal(err)
+	}
+	if !containsAction(fake.actions, "clear-journal") {
+		t.Errorf("Down(api) 目标含 journal 服务时应清理 journal: %v", fake.actions)
+	}
+}
+
 func TestClearLogsJournal(t *testing.T) {
 	fake := &fakeSys{}
 	cfg := &config.Config{Services: map[string]*config.Service{
