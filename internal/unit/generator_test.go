@@ -41,8 +41,59 @@ func TestGenerate(t *testing.T) {
 			t.Errorf("content missing %q\n%s", want, g.Content)
 		}
 	}
+	if strings.Contains(g.Content, "Requires=") {
+		t.Errorf("默认软依赖不应写 Requires=\n%s", g.Content)
+	}
 	if g.Hash == "" {
 		t.Error("hash is empty")
+	}
+}
+
+func TestGenerateStrongDependency(t *testing.T) {
+	// depends_on_required: true 时依赖写 Requires=（强依赖）而非 Wants=，顺序 After= 恒写。
+	svc := &config.Service{
+		Command:           "/opt/myapp/web",
+		DependsOn:         []string{"api"},
+		DependsOnRequired: true,
+	}
+	g, err := Generate("web", svc, "myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"After=myapp-api.service", "Requires=myapp-api.service"} {
+		if !strings.Contains(g.Content, want) {
+			t.Errorf("content missing %q\n%s", want, g.Content)
+		}
+	}
+	if strings.Contains(g.Content, "Wants=") {
+		t.Errorf("强依赖不应写 Wants=\n%s", g.Content)
+	}
+}
+
+func TestGenerateStartDelay(t *testing.T) {
+	// start_delay > 0 时生成 ExecStartPre=/bin/sleep N，且位于 ExecStart 之前。
+	svc := &config.Service{Command: "/opt/bin/x", StartDelay: 5}
+	g, err := Generate("x", svc, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(g.Content, "ExecStartPre=/bin/sleep 5") {
+		t.Errorf("start_delay 应写入 ExecStartPre=/bin/sleep 5\n%s", g.Content)
+	}
+	if strings.Index(g.Content, "ExecStartPre=") > strings.Index(g.Content, "ExecStart=") {
+		t.Errorf("ExecStartPre 应位于 ExecStart 之前\n%s", g.Content)
+	}
+}
+
+func TestGenerateNoStartDelay(t *testing.T) {
+	// start_delay 未配置（0）时不写 ExecStartPre。
+	svc := &config.Service{Command: "/opt/bin/x"}
+	g, err := Generate("x", svc, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(g.Content, "ExecStartPre") {
+		t.Errorf("未配置 start_delay 不应写 ExecStartPre\n%s", g.Content)
 	}
 }
 
@@ -62,7 +113,7 @@ func TestGenerateDefaultStdOutput(t *testing.T) {
 }
 
 func TestGenerateDefaultRestart(t *testing.T) {
-	// restart / restart_sec 未配置时写入默认 always / 5。
+	// restart / restart_sec / start_timeout 未配置时写入默认 always / 5 / 90。
 	svc := &config.Service{Command: "/opt/bin/x"}
 	g, err := Generate("x", svc, "")
 	if err != nil {
@@ -73,6 +124,21 @@ func TestGenerateDefaultRestart(t *testing.T) {
 	}
 	if !strings.Contains(g.Content, "RestartSec=5") {
 		t.Errorf("default restart_sec 应写入 RestartSec=5\n%s", g.Content)
+	}
+	if !strings.Contains(g.Content, "TimeoutStartSec=90") {
+		t.Errorf("default start_timeout 应写入 TimeoutStartSec=90\n%s", g.Content)
+	}
+}
+
+func TestGenerateStartTimeout(t *testing.T) {
+	// start_timeout 显式配置时透传，同时 start_delay 场景可放宽启动超时。
+	svc := &config.Service{Command: "/opt/bin/x", StartTimeout: 300}
+	g, err := Generate("x", svc, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(g.Content, "TimeoutStartSec=300") {
+		t.Errorf("start_timeout 应写入 TimeoutStartSec=300\n%s", g.Content)
 	}
 }
 

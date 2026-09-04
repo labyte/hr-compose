@@ -43,11 +43,22 @@ func Generate(name string, svc *config.Service, project string) (*Generated, err
 			deps = append(deps, Name(project, d))
 		}
 		joined := strings.Join(deps, " ")
+		// 顺序恒写 After；强弱由依赖指令分流：默认软依赖 Wants=，
+		// depends_on_required 时写 Requires= 实现强依赖（被依赖失败则本服务不启动、被停止则联动停止）。
+		depDir := "Wants="
+		if svc.DependsOnRequired {
+			depDir = "Requires="
+		}
 		fmt.Fprintf(&b, "After=%s\n", joined)
-		fmt.Fprintf(&b, "Wants=%s\n", joined)
+		fmt.Fprintf(&b, "%s%s\n", depDir, joined)
 	}
 
 	b.WriteString("\n[Service]\n")
+	// start_delay 延时启动：ExecStartPre sleep 在 After= 依赖启动完成后才执行，
+	// 天然满足"依赖起来后再计时"；它计入启动超时 TimeoutStartSec，延时较大需同步配 start_timeout 放宽。
+	if svc.StartDelay > 0 {
+		fmt.Fprintf(&b, "ExecStartPre=/bin/sleep %d\n", svc.StartDelay)
+	}
 	fmt.Fprintf(&b, "ExecStart=%s\n", svc.Command)
 	if svc.WorkingDir != "" {
 		fmt.Fprintf(&b, "WorkingDirectory=%s\n", svc.WorkingDir)
@@ -72,9 +83,10 @@ func Generate(name string, svc *config.Service, project string) (*Generated, err
 	if svc.CPUQuota != "" {
 		fmt.Fprintf(&b, "CPUQuota=%s\n", svc.CPUQuota)
 	}
-	// restart / restart_sec / std_output 未配置时使用代码默认值（always / 5 / null）
+	// restart / restart_sec / start_timeout / std_output 未配置时使用代码默认值（always / 5 / 90 / null）
 	fmt.Fprintf(&b, "Restart=%s\n", svc.EffectiveRestart())
 	fmt.Fprintf(&b, "RestartSec=%d\n", svc.EffectiveRestartSec())
+	fmt.Fprintf(&b, "TimeoutStartSec=%d\n", svc.EffectiveStartTimeout())
 	out := svc.EffectiveStdOutput()
 	fmt.Fprintf(&b, "StandardOutput=%s\n", out)
 	fmt.Fprintf(&b, "StandardError=%s\n", out)

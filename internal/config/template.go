@@ -26,7 +26,12 @@ func defaultTemplate(project string) string {
 #   cpu_quota     CPU 配额，百分比：100% = 1 核 / 200% = 2 核
 #   std_output    null（默认，丢弃输出；裸写 null 即可）/ none（兼容旧写法）/ journal / file:<path> / append:<path>
 #   log_file      std_output 为 null 时的外部日志路径（仅 logs 提示用）
-#   depends_on    启动顺序依赖（仅控制顺序，不阻塞失败）
+#   depends_on    启动顺序依赖（软依赖 Wants=，仅控制顺序、依赖失败不阻塞）；
+#                  depends_on_required: true 时改为强依赖 Requires=（依赖启动失败则本服务不启动，
+#                  且依赖被停止/失败会联动停掉本服务）
+#   depends_on_required  本服务 depends_on 是否强依赖（默认 false，需配合 depends_on 使用）
+#   start_delay   启动前延时秒数，默认 0 不延时；在依赖启动完成后才开始计时（计入启动超时，见 start_timeout）
+#   start_timeout 启动超时秒数，默认 90（与 systemd 默认一致）；start_delay 较大时需同步放宽，如 start_delay: 120 配 start_timeout: 180
 
 version: "1.0"
 name: ` + project + `

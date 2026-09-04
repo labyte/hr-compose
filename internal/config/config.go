@@ -40,6 +40,14 @@ type Service struct {
 	StdOutput   string   `yaml:"std_output"`
 	LogFile     string   `yaml:"log_file"`
 	DependsOn   []string `yaml:"depends_on"`
+	// DependsOnRequired 为 true 时 depends_on 由软依赖（Wants=）改为强依赖（Requires=）：
+	// 被依赖服务启动失败则本服务也不启动，且被依赖被停止/失败会联动停掉本服务。
+	DependsOnRequired bool `yaml:"depends_on_required"`
+	// StartDelay 启动前延时秒数，>0 时生成 ExecStartPre=/bin/sleep N（依赖启动完成后开始计时）。
+	StartDelay int `yaml:"start_delay"`
+	// StartTimeout 启动超时秒数，未配置经 EffectiveStartTimeout 取默认 90（systemd 默认值）并恒写入
+	// TimeoutStartSec。start_delay 计入该超时，延时较大时需同步放宽。
+	StartTimeout int `yaml:"start_timeout"`
 }
 
 // EffectiveDescription 返回写入 unit 的 Description 值，空值用默认占位。
@@ -64,6 +72,15 @@ func (s *Service) EffectiveRestartSec() int {
 		return 5
 	}
 	return s.RestartSec
+}
+
+// EffectiveStartTimeout 返回生效的启动超时秒数，0 按默认 90 秒处理（systemd 默认值）。
+// start_delay（ExecStartPre sleep）计入该超时，配置大延时需同步放宽。
+func (s *Service) EffectiveStartTimeout() int {
+	if s.StartTimeout == 0 {
+		return 90
+	}
+	return s.StartTimeout
 }
 
 // EffectiveStdOutput 返回生效的 std_output 值：
@@ -199,6 +216,9 @@ func (c *Config) Validate() error {
 			if _, ok := c.Services[dep]; !ok {
 				return fmt.Errorf("服务 %q 的 depends_on 引用了未定义的服务 %q", name, dep)
 			}
+		}
+		if svc.DependsOnRequired && len(svc.DependsOn) == 0 {
+			return fmt.Errorf("服务 %q 设置了 depends_on_required 但未声明 depends_on", name)
 		}
 	}
 	return nil

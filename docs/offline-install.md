@@ -107,7 +107,7 @@ services:
     memory_max: 2G                     # MemoryMax，大小带单位：2G / 500M / 1024K
     cpu_quota: 200%                    # CPUQuota，百分比：100% = 1 核，200% = 2 核
     std_output: journal                # StandardOutput/StandardError，取值：null（默认，裸写即可）/ none（兼容旧写法）/ journal / file:<path> / append:<path>
-    depends_on:                        # After= + Wants=，仅控制启动顺序
+    depends_on:                        # 软依赖默认：After= + Wants=（仅控制顺序，依赖失败不阻塞）；要强依赖加 depends_on_required
       - redis
   redis:
     command: /opt/redis/redis-server /opt/redis/redis.conf
@@ -118,7 +118,7 @@ services:
     log_file: /var/log/redis/redis.log # 仅用于 logs 命令的 tail 提示
 ```
 
-> 字段值直接透传给对应 systemd 指令。`user` 未配置时自动注入执行 up 的真实用户；`restart` / `restart_sec` / `std_output` 未配置时使用代码默认值：`always` / `5` / `null`（丢弃输出）。要日志进 journald 需显式 `std_output: journal`；丢弃输出直接裸写 `std_output: null` 即可（无需加引号），`none` 为兼容旧写法。
+> 字段值直接透传给对应 systemd 指令。`user` 未配置时自动注入执行 up 的真实用户；`restart` / `restart_sec` / `std_output` 未配置时使用代码默认值：`always` / `5` / `null`（丢弃输出）。要日志进 journald 需显式 `std_output: journal`；丢弃输出直接裸写 `std_output: null` 即可（无需加引号），`none` 为兼容旧写法。`depends_on` 默认软依赖（`Wants=`，依赖失败不阻塞）；`depends_on_required: true` 可改为强依赖（`Requires=`，依赖启动失败则本服务不启动、被停止/失败会联动停掉本服务）。`start_delay: <秒>` 可配置启动前延时（依赖启动完成后计时），`Restart=always` 每次自动重启都会再延时；延时计入启动超时，未配 `start_timeout` 时默认写入 `TimeoutStartSec=90`（同 systemd 默认），大延时需显式配 `start_timeout` 放宽。完整字段说明见项目根目录 README「编排文件参考」。
 
 ### 3.3 预览生成的 unit（可选，只读）
 

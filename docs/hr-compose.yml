@@ -19,7 +19,7 @@ services:
     memory_max: 2G                     # MemoryMax，大小带单位：2G / 500M / 1024K
     cpu_quota: 200%                    # CPUQuota，百分比：100% = 1 核，200% = 2 核
     std_output: journal                # StandardOutput/StandardError，取值：null（默认，裸写即可）/ none（兼容旧写法）/ journal / file:<path> / append:<path>
-    depends_on:                        # After= + Wants=，仅控制启动顺序
+    depends_on:                        # 软依赖默认：After= + Wants=（仅控制顺序，依赖失败不阻塞）；要强依赖加 depends_on_required
       - redis
 
   # 日志由 redis 自己写 /var/log/redis/redis.log，hr-compose logs 提示 tail 查看

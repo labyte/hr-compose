@@ -103,6 +103,50 @@ services:
 	}
 }
 
+func TestRejectRequiredDependsOnWithoutDependsOn(t *testing.T) {
+	// depends_on_required: true 却未声明 depends_on：字段悬空，应报错引导修正。
+	p := writeFixture(t, `
+name: testproj
+services:
+  api:
+    command: /opt/myapp/api
+    depends_on_required: true
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("want error for depends_on_required without depends_on")
+	}
+}
+
+func TestLoadNewDependencyDelayFields(t *testing.T) {
+	// depends_on_required 与 start_delay 齐备时应通过 Load 并正确落字段。
+	p := writeFixture(t, `
+name: testproj
+services:
+  api:
+    command: /opt/myapp/api
+  web:
+    command: /opt/myapp/web
+    depends_on: [api]
+    depends_on_required: true
+    start_delay: 5
+    start_timeout: 120
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	web := cfg.Services["web"]
+	if !web.DependsOnRequired {
+		t.Error("DependsOnRequired = false, want true")
+	}
+	if web.StartDelay != 5 {
+		t.Errorf("StartDelay = %d, want 5", web.StartDelay)
+	}
+	if got := web.EffectiveStartTimeout(); got != 120 {
+		t.Errorf("EffectiveStartTimeout = %d, want 120", got)
+	}
+}
+
 func TestRejectInvalidServiceName(t *testing.T) {
 	p := writeFixture(t, `
 name: testproj
@@ -291,6 +335,40 @@ services:
 	}
 	if got := svc.EffectiveRestartSec(); got != 10 {
 		t.Errorf("EffectiveRestartSec = %d, want 10", got)
+	}
+}
+
+func TestDefaultStartTimeout(t *testing.T) {
+	// start_timeout 未配置时走代码默认 90（systemd 默认值）。
+	p := writeFixture(t, `
+name: testproj
+services:
+  worker:
+    command: /opt/worker
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Services["worker"].EffectiveStartTimeout(); got != 90 {
+		t.Errorf("EffectiveStartTimeout = %d, want 90", got)
+	}
+}
+
+func TestExplicitStartTimeoutPassthrough(t *testing.T) {
+	p := writeFixture(t, `
+name: testproj
+services:
+  worker:
+    command: /opt/worker
+    start_timeout: 300
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Services["worker"].EffectiveStartTimeout(); got != 300 {
+		t.Errorf("EffectiveStartTimeout = %d, want 300", got)
 	}
 }
 

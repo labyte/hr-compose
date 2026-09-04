@@ -192,6 +192,9 @@ services:
 | `restart` | `always`，进程退出自动重启 |
 | `restart_sec` | `5`，重启间隔 5 秒 |
 | `std_output` | `null`，丢弃 stdout/stderr，日志由业务程序自行管理 |
+| `depends_on_required` | `false`，软依赖（`Wants=`），依赖失败不阻塞本服务 |
+| `start_delay` | `0`，不延时启动 |
+| `start_timeout` | `90`，启动超时 90 秒（systemd 默认值；未配置也写入 `TimeoutStartSec=90`） |
 
 需要指定用户、调整重启策略或让日志进 journald 时，再显式配置对应字段（完整字段见下）。
 
@@ -217,7 +220,7 @@ services:
     memory_max: 2G                     # MemoryMax，大小带单位：2G / 500M / 1024K
     cpu_quota: 200%                    # CPUQuota，百分比：100% = 1 核，200% = 2 核
     std_output: journal                # StandardOutput/StandardError，取值：null（默认，裸写即可）/ none（兼容旧写法）/ journal / file:<path> / append:<path>
-    depends_on:                        # After= + Wants=，仅控制启动顺序
+    depends_on:                        # 软依赖默认：After= + Wants=（仅控制顺序，依赖失败不阻塞）；要强依赖加 depends_on_required
       - redis
   redis:
     command: /opt/redis/redis-server /opt/redis/redis.conf
@@ -226,6 +229,18 @@ services:
     restart: always
     std_output: null                   # 丢弃 stdout/stderr（裸写 null 即可）
     log_file: /var/log/redis/redis.log # 仅用于 logs 命令的 tail 提示
+```
+
+需要"强依赖 + 启动延迟"时，在对应服务上加两个字段（以 `web` 强依赖 `api` 为例）：
+
+```yaml
+services:
+  web:
+    command: /opt/myapp/web
+    depends_on:
+      - api
+    depends_on_required: true   # 强依赖（Requires=）：api 启动失败则 web 不启动；api 被 stop/失败会联动停 web
+    start_delay: 5              # 启动前延时：等 api 启动完成后才开始计时 5s，再启动 web
 ```
 
 ### 字段说明
@@ -248,7 +263,10 @@ services:
 | `cpu_quota` | CPU 配额，百分比（100% = 1 核，200% = 2 核） | `CPUQuota` |
 | `std_output` | 日志目标（null 默认 / none 兼容 / journal / file:`<path>` / append:`<path>`） | `StandardOutput=`、`StandardError=` |
 | `log_file` | 外部日志文件路径（std_output 为 null 时 `logs` 提示用） | —（不参与 systemd 配置） |
-| `depends_on` | 依赖的服务，仅控制启动顺序 | `After=` + `Wants=` |
+| `depends_on` | 依赖的服务（仅 project 内引用）：默认软依赖，仅控制启动顺序、依赖失败不阻塞 | `After=` + `Wants=` |
+| `depends_on_required` | 把本服务 `depends_on` 改为强依赖：被依赖启动失败则本服务不启动，被依赖被停止/失败会联动停掉本服务（需配 `depends_on`，默认 false） | `After=` + `Requires=`（替代 `Wants=`） |
+| `start_delay` | 启动前延时秒数（默认 0 不延时）：先满足依赖启动顺序，依赖启动完成后再开始计时 | `ExecStartPre=/bin/sleep <n>` |
+| `start_timeout` | 启动超时秒数（默认 90，未配置也写入）：`start_delay` 计入该超时，配大延时需同步放宽 | `TimeoutStartSec` |
 
 ### 日志目标（std_output）
 
@@ -271,6 +289,7 @@ services:
 - **需要 root**：`up` / `down` / `start` / `stop` / `restart` / `clean` 操作 systemd（`/etc/systemd/system`）或日志，需 `sudo`。`ps` / `logs` / `config` 为只读，普通用户即可。
 - **`stop` 与 `down` 的区别**：`stop` 只停进程，保留 unit 文件与 enable 状态（可随时 `start` 恢复）；`down` 会删除 unit 并 disable（下次要 `up` 重建）。临时停服用 `stop`。
 - **unit 文件名带 project 前缀**：服务名只用小写字母、数字、`-`、`_`，unit 文件名 = `<name>-<service>.service`（`name` 同样限字符集）。不同目录配同名服务会落成不同 unit 文件，互不覆盖；同一 `name:` 下服务才互相编排（`depends_on` 仅 project 内生效）。
+- **强依赖与启动延迟语义**：`depends_on_required: true` 走 systemd `Requires=`——依赖被 `stop`/`down` 或启动失败时，systemd 会**联动停掉依赖方**（即便命令只指定了依赖）；因此 `down <dep>` 停掉某依赖时，强依赖它的服务也会被一并停（其 unit 仍安装着，可再 `start`）。`start_delay` 用 `ExecStartPre=/bin/sleep` 实现：先满足依赖启动顺序、依赖起来后再开始计时，但 `Restart=always` 的**每次自动重启都会再延时一次**，且延时计入启动超时——未配置 `start_timeout` 时恒写 `TimeoutStartSec=90`（同 systemd 默认），延时超过 90s 需显式配 `start_timeout` 放宽，否则启动会被判定超时失败。
 - **删除/覆盖保护**：unit 文件头部有 `# MANAGED BY hr-compose` 标记；`down` 只删除带该标记的文件，`up` 也不会覆盖非该标记的同名 unit——防止误删/误覆盖同名系统服务。如确需让 hr-compose 托管某个同名 unit，先删除原文件再 `up`。
 - **`std_output` 默认丢弃输出**：未配置时生成 `StandardOutput=null`，日志由业务程序自行管理；要进 journald 需显式 `std_output: journal`。丢弃输出直接裸写 `std_output: null` 即可（无需加引号）；`none` 为兼容旧写法。
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize，否则 systemd 会认为服务未启动。
