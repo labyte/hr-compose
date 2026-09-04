@@ -83,8 +83,6 @@ services:
     working_dir: /opt/myapp          # WorkingDirectory，工作目录
 ```
 
-未配置字段默认：`user` = 执行 up 的真实用户、`restart` = always（自动重启）、`restart_sec` = 5（间隔 5s）、`std_output` = null（丢弃输出）。
-
 完整字段示例（含各字段取值说明）：
 
 ```yaml
@@ -118,7 +116,43 @@ services:
     log_file: /var/log/redis/redis.log # 仅用于 logs 命令的 tail 提示
 ```
 
-> 字段值直接透传给对应 systemd 指令。`user` 未配置时自动注入执行 up 的真实用户；`restart` / `restart_sec` / `std_output` 未配置时使用代码默认值：`always` / `5` / `null`（丢弃输出）。要日志进 journald 需显式 `std_output: journal`；丢弃输出直接裸写 `std_output: null` 即可（无需加引号），`none` 为兼容旧写法。`depends_on` 默认软依赖（`Wants=`，依赖失败不阻塞）；`depends_on_required: true` 可改为强依赖（`Requires=`，依赖启动失败则本服务不启动、被停止/失败会联动停掉本服务）。`start_delay: <秒>` 可配置启动前延时（依赖启动完成后计时），`Restart=always` 每次自动重启都会再延时；延时计入启动超时，未配 `start_timeout` 时默认写入 `TimeoutStartSec=90`（同 systemd 默认），大延时需显式配 `start_timeout` 放宽。完整字段说明见项目根目录 README「编排文件参考」。
+#### 字段一览（全部支持字段）
+
+字段值直接透传给对应 systemd 指令，取值以 systemd 为准，不做 compose 语义翻译。`restart` / `restart_sec` / `start_timeout` / `std_output` 未配置时使用代码默认值（`always` / `5` / `90` / `null`），未配置也写入对应指令。
+
+| 字段 | 说明 | 写入的 systemd 指令 |
+| --- | --- | --- |
+| `name` | 项目名（**必填**）：unit 文件名前缀 `<name>-<service>.service`，需全局唯一；显式写死于此，重命名/移动目录不影响 | —（不参与 systemd 配置，决定 unit 文件名） |
+| `description` | 服务描述（默认 `hr-compose service <name>`） | `Description` |
+| `command` | 启动命令（**必须前台运行，不要 daemon**，必填） | `ExecStart` |
+| `working_dir` | 工作目录 | `WorkingDirectory` |
+| `user` / `group` | 运行身份 / 运行组（`user` 未配置默认注入执行 up 的真实用户，sudo 下取 `SUDO_USER`） | `User` / `Group` |
+| `environment` | 环境变量，每行一条 | `Environment=` |
+| `restart` | 重启策略，取值：no / on-success / on-failure / on-abnormal / on-abort / on-watchdog / always（未配置默认 always） | `Restart` |
+| `restart_sec` | 重启间隔秒数（默认 5） | `RestartSec` |
+| `stop_signal` | 停止信号，取值：SIGTERM（默认）/ SIGKILL / SIGINT / SIGHUP / SIGQUIT / SIGUSR1 / SIGUSR2 等 | `KillSignal` |
+| `stop_timeout` | 停止宽限期秒数（默认 90） | `TimeoutStopSec` |
+| `memory_max` | 内存上限，大小带单位（2G / 500M / 1024K） | `MemoryMax` |
+| `cpu_quota` | CPU 配额，百分比（100% = 1 核，200% = 2 核） | `CPUQuota` |
+| `std_output` | 日志目标：null（默认，裸写即可）/ none（兼容旧写法，同 null）/ journal / file:`<path>` / append:`<path>` | `StandardOutput=`、`StandardError=` |
+| `log_file` | 外部日志文件路径（std_output 为 null 时 `logs` 提示用） | —（不参与 systemd 配置） |
+| `depends_on` | 依赖的服务（仅 project 内引用）：默认软依赖，仅控制启动顺序、依赖失败不阻塞 | `After=` + `Wants=` |
+| `depends_on_required` | 把本服务 `depends_on` 改为强依赖：被依赖启动失败则本服务不启动，被停止/失败会联动停掉本服务（需配 `depends_on`，默认 false） | `After=` + `Requires=`（替代 `Wants=`） |
+| `start_delay` | 启动前延时秒数（>0 生效）：先满足依赖启动顺序，依赖启动完成后再开始计时；`Restart=always` 每次自动重启都会再延时 | `ExecStartPre=/bin/sleep <n>` |
+| `start_timeout` | 启动超时秒数（未配置也写入默认 90，同 systemd）：`start_delay` 计入该超时，配大延时需同步放宽 | `TimeoutStartSec` |
+
+#### std_output 取值说明
+
+| 取值 | 含义 | `hr-compose logs` 行为 |
+| --- | --- | --- |
+| `null`（默认） | 丢弃 stdout/stderr，日志由业务程序自行写入外部文件 | 提示用 `tail -f` 查看外部日志文件（配合 `log_file`） |
+| `none` | `null` 的兼容写法（旧版本推荐，语义相同） | 同上 |
+| `journal` | 写入 journald（非默认，需显式配置） | 执行 `journalctl -u <name>-<svcname>.service [-f]` |
+| `file:<path>` | 覆盖写入（截断原文件） | 提示用 `tail -f <path>` 查看 |
+| `append:<path>` | 追加写入 | 提示用 `tail -f <path>` 查看 |
+
+> `file:` / `append:` 的文件由 systemd 以 `User=` 身份打开，需保证目录对该用户可写；`file:` 会截断已有文件。
+> 日志清理：`clean [name...]` 清除日志——journal 服务清空系统 journal（journald 不支持按 unit 删除）、`file:`/`append:` 截断对应文件、`null` 仅提示；`down` 只在本次清理目标含 journal 服务时才会清系统 journal。
 
 ### 3.3 预览生成的 unit（可选，只读）
 

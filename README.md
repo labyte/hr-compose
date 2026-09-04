@@ -245,7 +245,7 @@ services:
 
 ### 字段说明
 
-> 所有字段值直接透传给对应 systemd 指令，**不做 compose 语义翻译**，取值以 systemd 为准。`restart` / `restart_sec` / `std_output` 未配置时使用代码默认值（`always` / `5` / `null`）。
+> 所有字段值直接透传给对应 systemd 指令，**不做 compose 语义翻译**，取值以 systemd 为准。`restart` / `restart_sec` / `start_timeout` / `std_output` 未配置时使用代码默认值（`always` / `5` / `90` / `null`），未配置也写入对应指令。
 
 | 字段 | 说明 | 写入的 systemd 指令 |
 | --- | --- | --- |
