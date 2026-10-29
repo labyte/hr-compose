@@ -23,9 +23,11 @@ func TestConfigFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := stdout.(*bytes.Buffer).String()
-	// 预览模式段头应标注"预览"与完整 unit 文件路径（UnitDir 默认 /etc/systemd/system）
-	if !strings.Contains(out, "预览") || !strings.Contains(out, "/etc/systemd/system/api.service") {
-		t.Errorf("Config(api) 应标注预览与 api 的完整路径\n%s", out)
+	// 预览模式段头应标注"预览"与将写入的完整 unit 文件路径。
+	// 路径由 filepath.Join(UnitDir, ...) 生成，断言同样按当前平台拼接（Linux 下即 /etc/systemd/system/api.service）。
+	wantPath := filepath.Join(UnitDir, "api.service")
+	if !strings.Contains(out, "预览") || !strings.Contains(out, wantPath) {
+		t.Errorf("Config(api) 应标注预览与 %s\n%s", wantPath, out)
 	}
 	if strings.Contains(out, "redis.service") {
 		t.Errorf("Config(api) 不应包含 redis\n%s", out)
@@ -48,9 +50,11 @@ func TestConfigAll(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := stdout.(*bytes.Buffer).String()
-	for _, want := range []string{"/etc/systemd/system/api.service", "/etc/systemd/system/redis.service"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("Config() 应包含完整路径 %q\n%s", want, out)
+	for _, name := range []string{"api", "redis"} {
+		// 路径按当前平台拼接断言（Linux 下即 /etc/systemd/system/<name>.service）
+		wantPath := filepath.Join(UnitDir, name+".service")
+		if !strings.Contains(out, wantPath) {
+			t.Errorf("Config() 应包含完整路径 %q\n%s", wantPath, out)
 		}
 	}
 }
