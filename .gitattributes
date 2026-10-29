@@ -1,0 +1,14 @@
+# 统一换行符：仓库内所有文本按 LF 存储，Windows 检出 shell 脚本也保持 LF。
+# 本机 core.autocrlf=true 会把 .sh 转成 CRLF，导致 bash 执行报 "$'\r': command not found"。
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.go    text eol=lf
+
+# 二进制不转换
+*.tar   binary
+*.gz    binary
+*.png   binary

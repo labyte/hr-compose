@@ -69,4 +69,31 @@ sudo "$BIN" down
 test ! -e /etc/systemd/system/smoke-demo-demo1.service
 test ! -e /etc/systemd/system/smoke-demo-demo2.service
 
+echo "==> up 复核：command 不存在时不谎报成功"
+# systemctl start 对 Type=simple 只要 fork 成功就返回 0，坏 command 会进入 auto-restart 循环。
+# up 必须复核 systemd 状态：点名坏服务、转述 systemd 的失败口径（203/EXEC）、以非 0 退出，
+# 同时不影响正常服务起来；状态表也不得把 [not set] 这类 systemd 内部字面量透出来。
+mkdir -p bad && cd bad
+cat > hr-compose.yml <<'YAML'
+name: smoke-bad
+services:
+  good:
+    command: /usr/bin/sleep infinity
+  bad:
+    command: /no/such/binary-at-all
+YAML
+rc=0
+out="$(sudo "$BIN" up 2>&1)" || rc=$?
+printf '%s\n' "$out" | sed 's/^/   /'
+test "$rc" != 0
+# 用 here-string 而非管道喂 grep：grep -q 命中即退出，管道上游可能吃到 SIGPIPE，
+# 叠加 pipefail 会让"应当命中"的断言假失败。
+grep -q 'bad' <<<"$out"
+grep -q '203' <<<"$out"
+grep -qE 'restarting|failed' <<<"$out"
+! grep -qF '[not set]' <<<"$out"
+test "$(systemctl is-active smoke-bad-good.service)" = "active"
+sudo "$BIN" down >/dev/null 2>&1 || true
+cd ..
+
 echo "E2E OK"
