@@ -24,13 +24,13 @@ make build        # 构建到 bin/hr-compose（version 经 ldflags -X main.versi
 make test         # go test ./...
 make test-race    # go test -race ./...（CI 用这个）
 make vet          # go vet ./...
-make lint         # golangci-lint run
+make lint         # golangci-lint run（工具为 v2 线，.golangci.yml 用 version: 2 格式）
 make fmt          # gofmt -w .
 make cross        # 交叉编译 linux/amd64 + linux/arm64 + darwin/arm64
 ```
 
 - 跑单个测试：`go test ./internal/engine -run TestOrderDependsFirst -v`
-- CI（`.github/workflows/ci.yml`）依次跑：`go vet ./...` → `go test -race ./...` → golangci-lint → `make cross`。
+- CI（`.github/workflows/ci.yml`）依次跑：`go vet ./...` → `go test -race ./...` → golangci-lint（`golangci-lint-action@v9` + `version: v2.15`）→ `make cross`。
 - `e2e/smoke.sh` 是端到端冒烟（真实 systemd + root，单测环境跑不了），已接入 CI 的 e2e job（ubuntu runner 以 sudo 执行 up/ps/stop/start/down）；本地 Linux 可 `bash e2e/smoke.sh` 直接跑。
 
 ## 架构与数据流
@@ -79,6 +79,7 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 - **`name` 必填且显式固定**：顶层 `name:` 缺失时 `Load` 报错（所有命令都先 Load）。项目名写死于文件、不随目录变化——重命名/移动目录不影响 unit 名，但**这是破坏性变更**：旧 yml 需补 `name:`，旧 `<svc>.service` 不会被新 `down` 清理，升级需先 `down` 旧服务或手动清理。
 - **`logs` 的分发**：按 `std_output` 值分流——`journal` 执行 `journalctl -u <name>-<svc>.service`（`-f` 跟随）；`file:<p>` / `append:<p>` 执行 `tail` 查看（文件不存在给提示）；未配置（默认 null）与 `none`（旧写法）只打印 `tail` 提示。`log_file` 字段仅用于 null 模式的 tail 提示，不参与 systemd 配置。
 - **journal 清理是全局的**：journald 不支持按 unit 删除日志，`down`（本次清理的目标服务中存在显式 `std_output: journal` 时；默认 null 不触发，指定子集时只判断目标集，不会因其他服务的 journal 误清）与 `clean [name...]` 对 journal 服务执行 `journalctl --rotate` + `--vacuum-size=1`，清空**整个系统 journal**（非仅 hr-compose 服务的日志）。`clean` 对 `file:`/`append:` 服务截断对应文件、`null` 仅提示。
+- **lint 的三处版本必须成套匹配**：`.golangci.yml` 是 `version: "2"` 格式，只有 golangci-lint v2 线能读（v1 会报 `unsupported version of the configuration`），CI 侧对应 `golangci-lint-action@v9`（action 从 v7 起才支持 linter v2；`@v6` 配 `version: latest` 装的仍是 v1）。配置文件与 action 版本要同笔改、同笔回滚——action 默认 `verify: true`，会按所装 linter 版本的 JSON Schema 校验配置，一半新一半旧直接失败。配置里另有两处是为**复刻 v1 检查集**而显式写的，删掉就冒新错：`linters.exclusions.presets` 的 `std-error-handling`（v1 默认排除 `fmt.Fprintf(stdout, ...)`/`os.Close` 一类，v2 不再自动应用，去掉即 7 条 errcheck，已在 `startstop.go` 上实测复现）与 `linters.settings.staticcheck.checks: ["all", "-QF*"]`（v1 的 staticcheck 不跑 QF，去掉即 `validateServiceName`/`validateProjectName` 的两处 `!(...)` 报 QF1001）。linter 集合未写 `linters.enable`，走 v2 默认的 standard 集（errcheck/govet/ineffassign/staticcheck/unused，等价 v1 默认集：deadcode 已删除由 unused 覆盖、gosimple 已并入 staticcheck）。本地还有个反向坑：v1 版 linter 跑在 Go 1.24+ 工具链上，内置的旧 go/types 读不了新 stdlib 导出数据，会报一堆 `undefined: yaml (typecheck)` 假错，需钉 `GOTOOLCHAIN=go1.22.x`（反之 v2 在 Go 1.22 下工作正常，故 CI 的 `go-version: "1.22"` 不必跟着升）。
 
 ## 测试约定
 
