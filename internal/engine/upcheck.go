@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -20,11 +21,12 @@ const (
 	upVerifyRounds = 5
 )
 
-// checkUp 复核 up 的启动结果，返回展示用的状态数据与"没起来"的服务及原因。
-// 单独存在是因为 `systemctl start` 返回 0 只代表 systemd 受理了任务，进程到底活没活要读状态才知道：
-// 真机实测 command 路径不存在时 start 照样返回 0（Restart=always 使其进入 auto-restart 循环），
-// 不复核就会把永远起不来的服务报成成功。状态数据顺带交给 renderPs，不重复查 systemctl。
-func (e *Engine) checkUp(names []string) (map[string]map[string]string, map[string]string, error) {
+// checkStarted 复核提交过 start/restart 的服务是否真的起来了，返回展示用的状态数据与
+// "没起来"的服务及原因。单独存在是因为 `systemctl start` 返回 0 只代表 systemd 受理了任务，
+// 进程到底活没活要读状态才知道：真机实测 command 路径不存在时 start 照样返回 0
+// （Restart=always 使其进入 auto-restart 循环），不复核就会把永远起不来的服务报成成功。
+// up 拿到的状态数据顺带交给 renderPs 展示，不重复查 systemctl。
+func (e *Engine) checkStarted(names []string) (map[string]map[string]string, map[string]string, error) {
 	states, err := e.fetchStates(names)
 	if err != nil {
 		return nil, nil, err
@@ -55,6 +57,35 @@ func (e *Engine) checkUp(names []string) (map[string]map[string]string, map[stri
 		}
 	}
 	return states, notUp, nil
+}
+
+// verifySubmitted 复核本轮提交过 start/restart 的服务：返回每条"未能正常运行"的错误
+// （按提交顺序，稳定），以及确实起来了的服务名，供调用方只对后者打印 OK。
+// `start` / `restart` 与 `up` 面对的是同一个坑——systemctl 返回 0 只代表任务受理，
+// 所以三个命令共用这套复核，避免"start 谎报成功、up 才诚实"的不一致。
+// 复核查询本身失败时不判服务失败，仍按 systemd 受理任务的结果打印 OK：连状态都读不到，
+// 硬说"没起来"同样是编造，查询错误另行报出。
+func (e *Engine) verifySubmitted(names []string) (errs []error, started []string) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	_, notUp, err := e.checkStarted(names)
+	if err != nil {
+		return []error{fmt.Errorf("复核服务状态: %w", err)}, names
+	}
+	for _, n := range names {
+		if reason, bad := notUp[n]; bad {
+			errs = append(errs, notRunningError(n, reason))
+			continue
+		}
+		started = append(started, n)
+	}
+	return errs, started
+}
+
+// notRunningError 统一"没起来"的报错措辞，up 与 start/restart 共用一条格式。
+func notRunningError(name, reason string) error {
+	return fmt.Errorf("%s 未能正常运行：%s", name, reason)
 }
 
 // stillStarting 判断状态是否还在启动过程中、值得再等一轮。

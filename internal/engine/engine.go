@@ -38,7 +38,7 @@ func (e *Engine) unitName(n string) string {
 // 指定名字时自动带上其 depends_on 依赖（递归），保证依赖先安装先启动；不指定则全部。
 // unit 内容变化且服务正在运行时改用 restart——start 对 active 的 unit 是 no-op，
 // 只 daemon-reload 不重启的话新配置对运行中的进程不生效。
-// 收尾复核启动结果（见 checkUp）并展示状态表：start 返回 0 不等于进程活着，
+// 收尾复核启动结果（见 checkStarted）并展示状态表：start 返回 0 不等于进程活着，
 // 没起来的服务逐条报出原因并使命令以非 0 退出，绝不谎报成功。
 func (e *Engine) Up(names ...string) error {
 	targets, err := e.upTargets(names)
@@ -110,7 +110,7 @@ func (e *Engine) Up(names ...string) error {
 	for _, t := range plan {
 		justDone = append(justDone, t.name)
 	}
-	states, notUp, cerr := e.checkUp(justDone)
+	states, notUp, cerr := e.checkStarted(justDone)
 	if cerr != nil {
 		errs = append(errs, fmt.Errorf("复核服务状态: %w", cerr))
 		states = map[string]map[string]string{}
@@ -121,7 +121,7 @@ func (e *Engine) Up(names ...string) error {
 	}
 	for _, n := range justDone { // 按拓扑序汇总，错误顺序稳定
 		if reason, ok := notUp[n]; ok && !skip[n] {
-			errs = append(errs, fmt.Errorf("%s 未能正常运行：%s", n, reason))
+			errs = append(errs, notRunningError(n, reason))
 		}
 	}
 	if err := e.renderPs(justDone, states); err != nil {

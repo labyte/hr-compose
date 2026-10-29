@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 
 	"hr.compose/internal/config"
@@ -111,6 +112,62 @@ func TestStopMultipleReverseDependency(t *testing.T) {
 	for i := range want {
 		if fake.actions[i] != want[i] {
 			t.Errorf("actions[%d] = %q, want %q", i, fake.actions[i], want[i])
+		}
+	}
+}
+
+func TestStartReportsWhenServiceNotRunning(t *testing.T) {
+	// systemctl start 返回 0 不代表进程活着（真机实测 command 路径不存在时照样返回 0）：
+	// 复核没过的服务不能打印 OK、必须让命令报错，否则谎报成功且退出码为 0。
+	fake := newDyingSys(map[string]map[string]string{"api.service": {
+		"ActiveState": "activating", "SubState": "auto-restart", "MainPID": "0",
+		"NRestarts": "3", "ExecMainCode": "exited", "ExecMainStatus": "203",
+	}})
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api":   {Command: "/no/such/binary"},
+		"redis": {Command: "/x/redis"},
+	}}
+	out := capturePsOutput(t)
+	err := New(cfg, fake).Start()
+	if err == nil {
+		t.Fatal("start 返回 0 但进程没活着时 Start 必须返回错误")
+	}
+	if !strings.Contains(err.Error(), "api") || !strings.Contains(err.Error(), "203") {
+		t.Errorf("错误应指明没起来的服务与退出码，got: %v", err)
+	}
+	if strings.Contains(err.Error(), "redis") {
+		t.Errorf("redis 正常启动，不该被一起报错，got: %v", err)
+	}
+	table := out.String()
+	if !strings.Contains(table, "start redis OK") {
+		t.Errorf("只有复核通过的服务才该打印 OK，got:\n%s", table)
+	}
+	if strings.Contains(table, "start api OK") {
+		t.Errorf("没起来的服务不该打印 OK，got:\n%s", table)
+	}
+}
+
+func TestRestartReportsWhenServiceNotRunning(t *testing.T) {
+	// restart 与 start 共用同一套复核：返回 0 但进程陷入 auto-restart 循环时报错、不打印 OK。
+	fake := newDyingSys(map[string]map[string]string{"api.service": {
+		"ActiveState": "activating", "SubState": "auto-restart", "MainPID": "0",
+		"NRestarts": "1", "ExecMainCode": "exited", "ExecMainStatus": "203",
+	}})
+	cfg := &config.Config{Services: map[string]*config.Service{"api": {Command: "/no/such/binary"}}}
+	out := capturePsOutput(t)
+	err := New(cfg, fake).Restart()
+	if err == nil {
+		t.Fatal("restart 返回 0 但进程没活着时 Restart 必须返回错误")
+	}
+	if !strings.Contains(err.Error(), "api") || !strings.Contains(err.Error(), "203") {
+		t.Errorf("错误应指明没起来的服务与退出码，got: %v", err)
+	}
+	if strings.Contains(out.String(), "restart api OK") {
+		t.Errorf("没起来的服务不该打印 OK，got:\n%s", out.String())
+	}
+	for _, a := range fake.actions {
+		if a == "start api.service" {
+			t.Errorf("Restart 不该退化成 start，actions = %v", fake.actions)
 		}
 	}
 }

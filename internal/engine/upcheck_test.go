@@ -105,7 +105,7 @@ func TestUpDoesNotFailServiceStillStarting(t *testing.T) {
 	}
 }
 
-func TestCheckUpWaitsUntilStateSettles(t *testing.T) {
+func TestCheckStartedWaitsUntilStateSettles(t *testing.T) {
 	// 复核是轮询而非一次定论：第一轮还在 start-pre、第二轮才 running 的服务不该被报成失败。
 	old := UnitDir
 	UnitDir = t.TempDir()
@@ -116,7 +116,7 @@ func TestCheckUpWaitsUntilStateSettles(t *testing.T) {
 	}}
 	cfg := &config.Config{Services: map[string]*config.Service{"api": {Command: "/x/api"}}}
 	e := New(cfg, fake)
-	states, notUp, err := e.checkUp([]string{"api"})
+	states, notUp, err := e.checkStarted([]string{"api"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestCheckUpWaitsUntilStateSettles(t *testing.T) {
 		t.Errorf("第二轮已 running，不该有未起来的服务: %v", notUp)
 	}
 	if got := states["api.service"]["SubState"]; got != "running" {
-		t.Errorf("checkUp 应返回最后一轮的状态，got %q", got)
+		t.Errorf("checkStarted 应返回最后一轮的状态，got %q", got)
 	}
 	if fake.calls < 3 { // 首轮快照 + 至少两轮复核
 		t.Errorf("应轮询多次才下结论，查询次数=%d", fake.calls)

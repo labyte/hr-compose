@@ -134,11 +134,11 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | --- | --- | --- |
 | `init` | 生成默认 `hr-compose.yml` 模板（已存在则不覆盖） | `hr-compose init` |
 | `up [name...]` | 生成 unit 并启动服务：指定名字时自动带上其 `depends_on` 依赖（递归），不指定则全部；依赖者先启动，无依赖关系按 yml 声明顺序；重复执行幂等，unit 内容变化且服务在运行中时自动改为 restart；完成后复核启动结果并展示各服务状态，没起来的服务逐条报原因并以非 0 退出 | `sudo hr-compose up web` |
-| `start [name...]` | 启动已安装的服务（不重生成 unit），不指定则全部；需先 `up` 过 | `sudo hr-compose start api web` |
+| `start [name...]` | 启动已安装的服务（不重生成 unit），不指定则全部；需先 `up` 过。systemctl 返回 0 只代表任务受理，故收尾会复核进程是否真的起来了：复核通过才打印 OK，未起来的逐条报原因并以非 0 退出 | `sudo hr-compose start api web` |
 | `stop [name...]` | 停止服务（保留 unit 与 enable，不删除），不指定则全部 | `sudo hr-compose stop api` |
 | `down [name...]` | 停止并清理指定服务，删除 unit 文件；只清理指定的、不连带其依赖，目标含 journal 日志服务时清空系统 journal | `sudo hr-compose down web` |
 | `clean [name...]` | 清除服务日志（journal 清空 / file 截断），不指定则全部 | `sudo hr-compose clean api` |
-| `restart [name...]` | 重启指定服务，不指定则全部 | `sudo hr-compose restart api web` |
+| `restart [name...]` | 重启指定服务，不指定则全部；与 `start` 同样在收尾复核进程是否真的起来了，未起来的逐条报原因并以非 0 退出 | `sudo hr-compose restart api web` |
 | `enable [name...]` | 设置服务开机启动（仅 enable，不启停），不指定则全部 | `sudo hr-compose enable api` |
 | `disable [name...]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
 | `ps` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / PID / MEMORY 用量与上限 / UPTIME 运行时长 / DESCRIPTION 描述列），内存按 working set 计算并转友好单位，终端下状态彩色显示 | `hr-compose ps` |
@@ -296,7 +296,7 @@ services:
 - **`std_output` 默认丢弃输出**：未配置时生成 `StandardOutput=null`，日志由业务程序自行管理；要进 journald 需显式 `std_output: journal`。丢弃输出直接裸写 `std_output: null` 即可（无需加引号）；`none` 为兼容旧写法。
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize，否则 systemd 会认为服务未启动。
 - **改完配置要重新 `up`**：`systemctl start` 对已 active 的 unit 是 no-op，只 `daemon-reload` 不重启的话新配置对运行中的进程不生效。`up` 在 unit 内容变化且服务正在运行时自动改用 `restart`；内容没变时幂等跳过，不会白重启。
-- **`up` 会复核启动结果**：`systemctl start` 返回 0 只代表 systemd 受理了任务——`command` 路径不存在时它照样返回 0（`Restart=always` 使服务进入 auto-restart 循环）。`up` 收尾读 systemd 状态复核，进程没活着的服务会逐条报出原因（转述 systemd 自己的口径，如 `退出码 203/EXEC：command 指定的可执行文件不存在或不可执行`、`Result=start-limit-hit`、`oom-kill` 指向 `memory_max`）并让命令以非 0 退出；单个服务失败不中断其余服务。仍在启动过程中（如 `start_delay` 计时中）不算失败。
+- **`up`/`start`/`restart` 会复核启动结果**：`systemctl start` 返回 0 只代表 systemd 受理了任务，`command` 路径不存在时它照样返回 0（`Restart=always` 使服务进入 auto-restart 循环）。三个命令收尾都读 systemd 状态复核：复核通过才打印 OK，进程没活着的服务逐条报出原因（转述 systemd 自己的口径，如 `退出码 203/EXEC：command 指定的可执行文件不存在或不可执行`、`Result=start-limit-hit`、`oom-kill` 指向 `memory_max`）并让命令以非 0 退出。`up` 单个服务失败不中断其余服务；`start`/`restart` 遇到 systemctl 直接报错（如 unit 不存在、权限不足）则不再提交后续服务。仍在启动过程中（如 `start_delay` 计时中）不算失败。
 - **project 由 `name` 界定**：工具只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统上其他 unit；同一 `name:` 下的 unit 归属该 project，不同 project 互不影响。
 - **从旧版升级（破坏性）**：`name` 为必填，旧 yml 需补 `name:` 才能继续使用；且 unit 文件名由 `<service>.service` 变为 `<name>-<service>.service`，旧 unit 不会被新版 `down` 清理——升级前先 `down` 旧服务（或手动 `systemctl stop/disable <svc>.service` 并删除对应文件），再用新版 `up`。
 - **ps 彩色输出**：终端下状态自动着色，管道/重定向自动无色；设 `NO_COLOR=1` 可强制关闭。
