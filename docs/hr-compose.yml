@@ -1,6 +1,7 @@
 # hr-compose.yml 完整示例
 # 所有字段值直接透传 systemd 对应指令，取值以 systemd 为准。
 version: "1.0"
+name: myapp                       # 项目名（必填）：unit 文件名前缀 <name>-<service>.service，需全局唯一
 services:
   # 依赖 redis，启动时先启 redis
   api:
@@ -30,3 +31,14 @@ services:
     restart: always
     std_output: null                   # 丢弃 stdout/stderr（裸写 null 即可）
     log_file: /var/log/redis/redis.log # 仅用于 logs 命令的 tail 提示
+
+  # 演示强依赖 + 启动延时：web 必须等 api 启动成功，api 起来后再等 5 秒才启 web
+  web:
+    command: /opt/myapp/web
+    working_dir: /opt/myapp            # WorkingDirectory
+    user: appuser                      # User
+    depends_on_required: true          # 强依赖：与 depends_on 一起用，把 Wants= 改写成 Requires=（api 启动失败则 web 不启动；api 被 stop/失败会联动停 web）
+    depends_on:                        # 依赖 api，故 up web 会自动带上 api（down web 不连带 api）
+      - api
+    start_delay: 5                     # 启动前延时秒数：生成 ExecStartPre=/bin/sleep 5，在依赖启动完成后才开始计时
+    start_timeout: 120                 # TimeoutStartSec，未配置默认 90；start_delay 计入该超时，延时较大时需同步放宽
