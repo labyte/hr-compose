@@ -12,10 +12,8 @@ var upCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := e.Up(args...); err != nil {
-			return err
-		}
-		// up 完成后直接展示服务状态
-		return e.Ps()
+		// Up 自身在收尾会展示本次目标服务的状态（部分失败时也展示，failed/exited 一眼可见），
+		// 所以这里不再另调 Ps；失败的服务已汇总进返回的 error，交给 cobra 打印并置非 0 退出码。
+		return e.Up(args...)
 	},
 }

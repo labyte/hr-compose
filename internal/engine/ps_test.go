@@ -35,24 +35,6 @@ func TestStateColors(t *testing.T) {
 	}
 }
 
-func TestFormatBytes(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"0", "0B"},
-		{"512", "512B"},
-		{"1024", "1K"},
-		{"1048576", "1.0M"},
-		{"1073741824", "1.0G"},
-		{"18446744073709551615", "-"}, // systemd 未统计哨兵值
-		{"-", "-"},                    // 非数值透传
-		{"10M", "10M"},                // 已格式化透传
-	}
-	for _, tc := range cases {
-		if got := formatBytes(tc.in); got != tc.want {
-			t.Errorf("formatBytes(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
 func TestMergedState(t *testing.T) {
 	cases := []struct{ active, sub, load, want string }{
 		{"active", "running", "loaded", "running"},             // 运行中

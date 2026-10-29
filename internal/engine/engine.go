@@ -2,6 +2,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,43 +34,136 @@ func (e *Engine) unitName(n string) string {
 	return unit.Name(e.cfg.Name, n)
 }
 
-// Up 生成、enable 并按依赖顺序 start 服务。
+// Up 生成、enable 并按依赖顺序启动服务。
 // 指定名字时自动带上其 depends_on 依赖（递归），保证依赖先安装先启动；不指定则全部。
+// unit 内容变化且服务正在运行时改用 restart——start 对 active 的 unit 是 no-op，
+// 只 daemon-reload 不重启的话新配置对运行中的进程不生效。
+// 收尾复核启动结果（见 checkUp）并展示状态表：start 返回 0 不等于进程活着，
+// 没起来的服务逐条报出原因并使命令以非 0 退出，绝不谎报成功。
 func (e *Engine) Up(names ...string) error {
 	targets, err := e.upTargets(names)
 	if err != nil {
 		return err
 	}
 
-	// 第一趟：生成并写入全部 target 的 unit（幂等，仅在内容变化时重写），期间不 reload
+	// 第一趟：生成并写入全部 target 的 unit（幂等，仅在内容变化时重写），期间不 reload。
+	// 生成产物与写入结果记下来给第二趟复用，避免重复渲染 unit。
+	plan := make([]upTarget, 0, len(targets))
+	units := make([]string, 0, len(targets))
 	for _, name := range targets {
 		g, err := unit.Generate(name, e.cfg.Services[name], e.cfg.Name)
 		if err != nil {
 			return err
 		}
-		if err := writeIfManaged(filepath.Join(UnitDir, g.UnitPath), g.Content); err != nil {
+		action, err := writeIfManaged(filepath.Join(UnitDir, g.UnitPath), g.Content)
+		if err != nil {
 			return err
 		}
+		plan = append(plan, upTarget{name: name, unitPath: g.UnitPath, write: action})
+		units = append(units, g.UnitPath)
 	}
+
+	// 有 unit 被重写时，取"写入前的运行状态"用于判断该 restart 还是 start。
+	// 只改文件不影响运行中的进程，daemon-reload 之前取与之后取对 ActiveState 等价，故放在 reload 前。
+	if anyReplaced(plan) {
+		if states, err := e.sys.ShowMany(units); err == nil {
+			for i := range plan {
+				plan[i].wasRunning = stateIsRunning(states[plan[i].unitPath])
+			}
+		}
+	}
+
 	// 所有 unit 就绪后统一 daemon-reload 一次（避免逐服务 reload）
 	if err := e.sys.DaemonReload(); err != nil {
-		return err
+		return fmt.Errorf("daemon-reload: %w", err)
 	}
-	// 第二趟：按依赖顺序 enable + start
-	for _, name := range targets {
-		g, err := unit.Generate(name, e.cfg.Services[name], e.cfg.Name)
-		if err != nil {
-			return err
+	// 第二趟：按依赖顺序 enable + 启动。单个服务失败不中断其余服务（依赖不满足的那个由 systemd
+	// 报错，其他服务照常安装启动），但结束时汇总报错，绝不把部分成功说成成功。
+	var errs []error
+	var failed []string
+	for _, t := range plan {
+		if err := e.sys.Enable(t.unitPath); err != nil {
+			errs = append(errs, fmt.Errorf("enable %s: %w", t.unitPath, err))
+			failed = append(failed, t.name)
+			continue
 		}
-		if err := e.sys.Enable(g.UnitPath); err != nil {
-			return fmt.Errorf("enable %s: %w", g.UnitPath, err)
+		verb, act := "启动", e.sys.Start
+		if t.write == unitReplaced && t.wasRunning {
+			verb, act = "重启", e.sys.Restart
 		}
-		if err := e.sys.Start(g.UnitPath); err != nil {
-			return fmt.Errorf("启动 %s: %w", name, err)
+		if err := act(t.unitPath); err != nil {
+			errs = append(errs, fmt.Errorf("%s %s: %w", verb, t.name, err))
+			failed = append(failed, t.name)
+			continue
 		}
-		fmt.Printf("up %s OK\n", name)
+		// 只说"已提交"：start 返回 0 是 systemd 受理了任务，进程是否真活着由下面的复核定论。
+		fmt.Printf("up %s 已%s\n", t.name, verb)
+	}
+	if len(failed) > 0 {
+		errs = append(errs, fmt.Errorf("%d 个服务未成功: %s", len(failed), strings.Join(failed, "、")))
+	}
+	// 收尾：复核启动结果并展示本次目标服务的状态。复核是必须的——真机实测 command 路径不存在时
+	// `systemctl start` 仍返回 0（Restart=always 让它进入 auto-restart 循环），不复核就是谎报成功。
+	// 失败的服务在表里直接呈现 failed/restarting，用户不必读 systemctl 的长报错也能看出哪些没起来
+	// （部分失败时同样展示）；start 本身已报错的服务原因明确，不重复下结论。
+	justDone := make([]string, 0, len(plan))
+	for _, t := range plan {
+		justDone = append(justDone, t.name)
+	}
+	states, notUp, cerr := e.checkUp(justDone)
+	if cerr != nil {
+		errs = append(errs, fmt.Errorf("复核服务状态: %w", cerr))
+		states = map[string]map[string]string{}
+	}
+	skip := make(map[string]bool, len(failed))
+	for _, n := range failed {
+		skip[n] = true
+	}
+	for _, n := range justDone { // 按拓扑序汇总，错误顺序稳定
+		if reason, ok := notUp[n]; ok && !skip[n] {
+			errs = append(errs, fmt.Errorf("%s 未能正常运行：%s", n, reason))
+		}
+	}
+	if err := e.renderPs(justDone, states); err != nil {
+		errs = append(errs, fmt.Errorf("展示服务状态: %w", err))
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	return nil
+}
+
+// unitWrite 描述 writeIfManaged 的落盘结果，供 Up 决定后续动作。
+type unitWrite int
+
+const (
+	unitUnchanged unitWrite = iota // 内容一致，未写盘
+	unitCreated                    // 首次安装：文件原本不存在
+	unitReplaced                   // 托管文件内容变化，已重写
+)
+
+// upTarget 是 Up 第二趟处理的一个服务：unit 文件名、落盘结果、写入前是否在运行。
+type upTarget struct {
+	name       string
+	unitPath   string
+	write      unitWrite
+	wasRunning bool
+}
+
+// anyReplaced 判断本次是否有托管 unit 被重写——只有这种情况才需要查询运行状态。
+func anyReplaced(plan []upTarget) bool {
+	for _, t := range plan {
+		if t.write == unitReplaced {
+			return true
+		}
+	}
+	return false
+}
+
+// stateIsRunning 判断 systemctl show 结果是否表示进程还在跑（activating/deactivating/reloading
+// 都未落到稳定态，同样按在跑处理，因为 restart 才能把新配置带进进程）。
+func stateIsRunning(fields map[string]string) bool {
+	return runningStates[fields["ActiveState"]]
 }
 
 // upTargets 解析 up 的目标集并补齐依赖闭包：
@@ -146,25 +240,32 @@ func (e *Engine) anyJournal(names []string) bool {
 	return false
 }
 
-// writeIfManaged 只在目标不存在或是 hr-compose 托管文件时写入：
+// writeIfManaged 只在目标不存在或是 hr-compose 托管文件时写入，并返回落盘结果供 Up 决策：
 //   - 非托管同名文件 → 拒绝覆盖（与 down 的删除保护对称）
-//   - 托管且内容一致 → 跳过（幂等）
-//   - 托管且内容变化 → 覆盖
-func writeIfManaged(path, content string) error {
+//   - 托管且内容一致 → 跳过（幂等），返回 unitUnchanged
+//   - 托管且内容变化 → 覆盖，返回 unitReplaced
+//   - 文件原本不存在 → 首次安装，返回 unitCreated
+func writeIfManaged(path, content string) (unitWrite, error) {
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return os.WriteFile(path, []byte(content), 0o644)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return unitUnchanged, err
+		}
+		return unitCreated, nil
 	}
 	if err != nil {
-		return err
+		return unitUnchanged, err
 	}
 	if !strings.HasPrefix(string(b), unit.ManagedMark) {
-		return fmt.Errorf("拒绝覆盖 %s：已存在同名 unit 且非 hr-compose 管理（如确需托管请先删除原文件）", path)
+		return unitUnchanged, fmt.Errorf("拒绝覆盖 %s：已存在同名 unit 且非 hr-compose 管理（如确需托管请先删除原文件）", path)
 	}
 	if string(b) == content {
-		return nil // 内容一致，幂等跳过
+		return unitUnchanged, nil // 内容一致，幂等跳过
 	}
-	return os.WriteFile(path, []byte(content), 0o644)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return unitUnchanged, err
+	}
+	return unitReplaced, nil
 }
 
 // removeIfManaged 只删除带 hr-compose 托管标记的文件，防止误删同名系统服务。

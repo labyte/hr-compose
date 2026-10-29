@@ -49,12 +49,15 @@ func (c *Real) Show(unit string) (map[string]string, error) {
 	return fields, nil
 }
 
-// showProps 是 ps 需要的属性，ShowMany 用 -p 过滤以减少输出。
+// showProps 是 ps 与 up 复核需要的属性，ShowMany 用 -p 过滤以减少输出。
 // ExecMainStartTimestampMonotonic=主进程开机时刻（微秒，ps 计算运行时长用）。
 // LoadState=unit 加载状态（not-found 表示未安装，ps 用于区分未安装与已停止）。
+// Result/ExecMainCode/ExecMainStatus/NRestarts=进程没起来时 systemd 自己的失败口径，
+// up 的启动复核用它拼出可直接指导修复的原因，不自己猜失败原因。
 var showProps = []string{
 	"Id", "ActiveState", "SubState", "LoadState", "UnitFileState", "MainPID", "MemoryCurrent",
 	"ExecMainStartTimestampMonotonic",
+	"Result", "ExecMainCode", "ExecMainStatus", "NRestarts",
 }
 
 // ShowMany 一次调用 systemctl show 读取多个 unit 的状态，按 unit 名（Id 字段）索引。

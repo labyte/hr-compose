@@ -1,15 +1,27 @@
 package engine
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"hr.compose/internal/config"
 	"hr.compose/internal/systemctl"
 	"hr.compose/internal/unit"
 )
+
+// TestMain 把 up 复核的等待改成空操作：单测里 systemctl 是 fake、状态即时给定，
+// 真睡 300ms×轮数只会拖慢测试而不改变结论（复核的判断逻辑仍按 fake 状态原样断言）。
+func TestMain(m *testing.M) {
+	old := sleepFunc
+	sleepFunc = func(time.Duration) {}
+	code := m.Run()
+	sleepFunc = old
+	os.Exit(code)
+}
 
 // fakeSys 记录调用序列，便于断言动作顺序。
 type fakeSys struct {
@@ -56,6 +68,103 @@ func fakeShowFields() map[string]string {
 }
 
 var _ systemctl.Client = (*fakeSys)(nil)
+
+// stateSys 在 fakeSys 基础上按 unit 指定状态，用于验证 up 的 start/restart 分流与启动复核：
+// states 是"写 unit 之前"的状态（Up 据此决定 start 还是 restart）；调用过 Start/Restart 之后
+// 改用 after（未指定的服务视为启动成功、running），对应真实世界里"start 之后进程就跑起来了"，
+// 这样只关心动作序列的用例不会被收尾复核误伤。
+type stateSys struct {
+	fakeSys
+	states  map[string]string
+	after   map[string]map[string]string
+	started bool
+}
+
+func (s *stateSys) show(u string) map[string]string {
+	f := fakeShowFields()
+	if s.started {
+		if custom, ok := s.after[u]; ok {
+			for k, v := range custom {
+				f[k] = v
+			}
+		}
+		return f
+	}
+	if st, ok := s.states[u]; ok {
+		f["ActiveState"] = st
+		f["SubState"] = "dead"
+	}
+	return f
+}
+
+func (s *stateSys) Show(u string) (map[string]string, error) { return s.show(u), nil }
+
+func (s *stateSys) ShowMany(units []string) (map[string]map[string]string, error) {
+	m := make(map[string]map[string]string, len(units))
+	for _, u := range units {
+		m[u] = s.show(u)
+	}
+	return m, nil
+}
+
+func (s *stateSys) Start(u string) error {
+	s.started = true
+	s.actions = append(s.actions, "start "+u)
+	return nil
+}
+
+func (s *stateSys) Restart(u string) error {
+	s.started = true
+	s.actions = append(s.actions, "restart "+u)
+	return nil
+}
+
+// failStartSys 让指定 unit 的 start 失败，用于验证 up 的部分失败语义。
+type failStartSys struct {
+	fakeSys
+	fail map[string]bool
+}
+
+func (f *failStartSys) Start(u string) error {
+	if f.fail[u] {
+		f.actions = append(f.actions, "start "+u)
+		return errors.New("模拟启动失败（如 ExecStart 路径不存在）")
+	}
+	return f.fakeSys.Start(u)
+}
+
+// hasAction 判断动作序列中是否有某条动作（整条精确匹配，避免 restart 被当成 start）。
+func hasAction(actions []string, want string) bool {
+	for _, a := range actions {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+// actionIndex 返回动作首次出现的位置，不存在时返回 -1。
+func actionIndex(actions []string, want string) int {
+	for i, a := range actions {
+		if a == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// writeUnitFile 按给定配置先把 unit 装上（模拟上一次 up 的产物），返回生成内容。
+func writeUnitFile(t *testing.T, name string, svc *config.Service, project string) string {
+	t.Helper()
+	g, err := unit.Generate(name, svc, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(UnitDir, g.UnitPath), []byte(g.Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return g.Content
+}
 
 func TestOrderDependsFirst(t *testing.T) {
 	cfg := &config.Config{Services: map[string]*config.Service{
@@ -441,6 +550,122 @@ func TestUpSkipsUnchanged(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(UnitDir, "api.service")); string(b) != g.Content {
 		t.Error("内容一致时不应改写")
+	}
+}
+
+func TestUpRestartsRunningServiceWhenUnitChanged(t *testing.T) {
+	// 真机实证过：systemctl start 对 active 的 unit 是 no-op，改完配置只 reload 不重启，
+	// 运行中的进程仍是旧配置。unit 内容变化 + 服务在跑 → 必须 restart。
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	writeUnitFile(t, "api", &config.Service{Command: "/x/old"}, "")
+	fake := &stateSys{states: map[string]string{"api.service": "active"}}
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api": {Command: "/x/new"},
+	}}
+	if err := New(cfg, fake).Up(); err != nil {
+		t.Fatal(err)
+	}
+	if !hasAction(fake.actions, "restart api.service") {
+		t.Errorf("unit 内容变化且服务在运行时应 restart，动作序列 %v", fake.actions)
+	}
+	if hasAction(fake.actions, "start api.service") {
+		t.Errorf("内容变化的运行中服务不应只 start，动作序列 %v", fake.actions)
+	}
+	if i, j := actionIndex(fake.actions, "daemon-reload"), actionIndex(fake.actions, "restart api.service"); i > j {
+		t.Errorf("restart 必须在 daemon-reload 之后（新 unit 内容先加载）: %v", fake.actions)
+	}
+}
+
+func TestUpStartsStoppedServiceWhenUnitChanged(t *testing.T) {
+	// 服务没在跑（inactive/failed/未安装）时不需要 restart，start 即可生效，避免多余的一次停止-启动。
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	for _, state := range []string{"inactive", "failed", ""} {
+		UnitDir = t.TempDir()
+		writeUnitFile(t, "api", &config.Service{Command: "/x/old"}, "")
+		fake := &stateSys{states: map[string]string{"api.service": state}}
+		cfg := &config.Config{Services: map[string]*config.Service{"api": {Command: "/x/new"}}}
+		if err := New(cfg, fake).Up(); err != nil {
+			t.Fatal(err)
+		}
+		if !hasAction(fake.actions, "start api.service") || hasAction(fake.actions, "restart api.service") {
+			t.Errorf("ActiveState=%q 时应 start 而非 restart: %v", state, fake.actions)
+		}
+	}
+}
+
+func TestUpDoesNotRestartUnchangedRunningService(t *testing.T) {
+	// 内容没变（重复 up）时不得 restart —— restart 会把没改过的服务白白重启一次。
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	cfg := &config.Config{Services: map[string]*config.Service{"api": {Command: "/x/api"}}}
+	writeUnitFile(t, "api", cfg.Services["api"], "")
+	fake := &stateSys{states: map[string]string{"api.service": "active"}}
+	if err := New(cfg, fake).Up(); err != nil {
+		t.Fatal(err)
+	}
+	if hasAction(fake.actions, "restart api.service") {
+		t.Errorf("内容未变时不应 restart: %v", fake.actions)
+	}
+	if !hasAction(fake.actions, "start api.service") {
+		t.Errorf("内容未变时应保持原样只 start: %v", fake.actions)
+	}
+}
+
+func TestUpFirstInstallStartsRunningUnit(t *testing.T) {
+	// 首次安装（文件原本不存在）即使 systemd 里该 unit 名字已在运行，也只 start 不 restart，
+	// 语义是"安装并启动"，不是"配置变更需重启"。
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	fake := &stateSys{states: map[string]string{"api.service": "active"}}
+	cfg := &config.Config{Services: map[string]*config.Service{"api": {Command: "/x/api"}}}
+	if err := New(cfg, fake).Up(); err != nil {
+		t.Fatal(err)
+	}
+	if hasAction(fake.actions, "restart api.service") {
+		t.Errorf("首次安装不应 restart: %v", fake.actions)
+	}
+	if !hasAction(fake.actions, "start api.service") {
+		t.Errorf("首次安装应 start: %v", fake.actions)
+	}
+}
+
+func TestUpContinuesAfterFailureAndReports(t *testing.T) {
+	// 单个服务启动失败（ExecStart 路径不存在等）：后面的服务照常安装启动，不因此中断；
+	// 但最终必须返回错误并把失败服务列出来，不能只打 "up xxx 已启动" 谎报成功。
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	fake := &failStartSys{fail: map[string]bool{"api.service": true}}
+	cfg := &config.Config{
+		Services: map[string]*config.Service{
+			"api": {Command: "/nonexistent/api"},
+			"web": {Command: "/x/web"},
+		},
+		ServiceOrder: []string{"api", "web"},
+	}
+	err := New(cfg, fake).Up()
+	if err == nil {
+		t.Fatal("有服务启动失败时 up 应返回错误")
+	}
+	if !strings.Contains(err.Error(), "api") {
+		t.Errorf("错误应点出失败的服务名，got %v", err)
+	}
+	if !hasAction(fake.actions, "start web.service") {
+		t.Errorf("api 失败后 web 仍应被启动: %v", fake.actions)
+	}
+	if strings.Contains(err.Error(), "up web OK") {
+		t.Errorf("错误信息不该把成功服务也算进去: %v", err)
 	}
 }
 

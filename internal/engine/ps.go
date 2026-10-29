@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
+
+	"hr.compose/internal/config"
 )
 
 // stdout 可被测试覆盖以捕获输出（同 UnitDir 变量的模式）。
@@ -18,39 +21,65 @@ var stdout io.Writer = os.Stdout
 // uptimeFile 是系统开机秒数来源（/proc/uptime 第一字段），变量形式便于测试覆盖。
 var uptimeFile = "/proc/uptime"
 
-// Ps 遍历 yml 服务，逐个读取 systemd 状态并格式化输出。
-// 列：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME / DESCRIPTION，终端下状态列着色。
-// STATUS=ActiveState、SubState 与 LoadState 合并（mergedState），UPTIME=主进程运行时长（可判断是否重启过），
-// ENABLED=UnitFileState（是否开机启动）。unit 实际文件路径见 config 命令预览。
-func (e *Engine) Ps() error {
+// Ps 打印服务状态。names 为空（nil/空切片）则展示 yml 中全部服务，否则只展示指定的服务
+// （未定义的名字报错，顺序按依赖拓扑）。列：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME / DESCRIPTION，
+// 终端下状态列着色。STATUS=ActiveState、SubState 与 LoadState 合并（mergedState），
+// UPTIME=主进程运行时长（可判断是否重启过），ENABLED=UnitFileState（是否开机启动）。
+// MEMORY=working set（cgroup memory.current 扣掉可回收的 inactive_file），配了 memory_max 时附 " / 上限"。
+// unit 实际文件路径见 config 命令预览。
+func (e *Engine) Ps(names ...string) error {
+	targets, err := e.resolve(names...)
+	if err != nil {
+		return err
+	}
+	all, err := e.fetchStates(targets)
+	if err != nil {
+		return err
+	}
+	return e.renderPs(targets, all)
+}
+
+// fetchStates 批量读取给定服务的 systemd 状态；批量结果里缺失的 unit（未加载）回退逐服务查询。
+// 只有 systemctl 本身完全不可用（批量与逐个都拿不到任何字段）时才返回错误。
+func (e *Engine) fetchStates(names []string) (map[string]map[string]string, error) {
+	units := make([]string, len(names))
+	for i, n := range names {
+		units[i] = e.unitName(n)
+	}
+	// 一次批量查询所有 unit，减少进程启动
+	all, err := e.sys.ShowMany(units)
+	if err != nil {
+		all = map[string]map[string]string{}
+	}
+	got := false
+	for _, n := range names {
+		u := e.unitName(n)
+		if f, ok := all[u]; ok {
+			got = got || len(f) > 0
+			continue
+		}
+		// 批量结果中缺失的 unit（未加载）回退逐服务查询
+		if f, serr := e.sys.Show(u); serr == nil {
+			all[u] = f
+			got = got || len(f) > 0
+		}
+	}
+	if !got && err != nil {
+		return nil, err
+	}
+	return all, nil
+}
+
+// renderPs 按给定状态数据渲染状态表（names 是展示顺序）。与 fetchStates 分开，
+// 便于 up 先查一次状态做启动复核、再用同一份数据画表，不重复调用 systemctl。
+func (e *Engine) renderPs(names []string, all map[string]map[string]string) error {
 	t := table.NewWriter()
 	t.SetOutputMirror(stdout)
 	t.AppendHeader(table.Row{"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME", "DESCRIPTION"})
 	t.SetColumnConfigs([]table.ColumnConfig{
-		{Number: 8, WidthMax: 40}, // 描述列限宽（默认 WidthMaxEnforcer=text.WrapText 换行）
+		{Number: 7, WidthMax: 40}, // 描述列限宽（默认 WidthMaxEnforcer=text.WrapText 换行）
 	})
 	t.SetStyle(table.StyleLight)
-
-	names := e.order(e.allNames())
-	unitNames := make([]string, len(names))
-	for i, n := range names {
-		unitNames[i] = e.unitName(n)
-	}
-	// 一次批量查询所有 unit，减少进程启动
-	all, err := e.sys.ShowMany(unitNames)
-	if err != nil {
-		all = map[string]map[string]string{}
-	}
-	// 批量结果中缺失的 unit（未加载）回退逐服务查询
-	for _, n := range names {
-		u := e.unitName(n)
-		if _, ok := all[u]; ok {
-			continue
-		}
-		if f, serr := e.sys.Show(u); serr == nil {
-			all[u] = f
-		}
-	}
 
 	// 开机时长只读一次，供全部服务的 UPTIME 列复用
 	boot, bootErr := readUptime()
@@ -61,7 +90,7 @@ func (e *Engine) Ps() error {
 		if !ok {
 			// Show 完全失败（如 systemctl 不可用/无任何输出）时按空状态展示；
 			// 未安装的 unit 在正常 systemd 下能取到 LoadState=not-found，会走下方 not-found 分支
-			t.AppendRow(table.Row{name, "-", "-", "-", "-", "-", "-", valueOrDash(svc.Description)})
+			t.AppendRow(table.Row{name, "-", "-", "-", "-", "-", valueOrDash(svc.Description)})
 			continue
 		}
 		var colors text.Colors
@@ -79,14 +108,152 @@ func (e *Engine) Ps() error {
 			name,
 			colors.Sprint(mergedState(fields["ActiveState"], fields["SubState"], fields["LoadState"])),
 			valueOrDash(fields["UnitFileState"]),
-			fields["MainPID"],
-			formatBytes(fields["MemoryCurrent"]),
+			pidOrDash(fields["MainPID"]),
+			memoryCell(e.unitName(name), svc, fields, on),
 			up,
 			valueOrDash(svc.Description),
 		})
 	}
 	t.Render()
 	return nil
+}
+
+// cgroupBase 是 cgroup 挂载根目录。变量形式便于测试覆盖（同 UnitDir 的模式）。
+// cgroup v2（统一层级）下 systemd 系统级 unit 的目录是 <root>/system.slice/<unit>.service/，
+// cgroup v1 或混合层级下该路径不存在，读不到时内存展示自动回退 systemd 的 MemoryCurrent。
+var cgroupBase = "/sys/fs/cgroup"
+
+// memoryCell 组装 ps 的 MEMORY 单元格，口径见 workingSetBytes。
+// 配置了 memory_max 时追加 " / <上限>"，并在用量逼近上限时给出警示标记/配色。
+// 拿不到内存数据（unit 未安装、未启用 MemoryAccounting、systemd 输出字面量 "[not set]"、
+// 老版本的 2^64-1 哨兵值）时统一显示 "-"，不把 systemd 的内部字面量透给用户。
+func memoryCell(unitName string, svc *config.Service, fields map[string]string, on bool) string {
+	cur, haveCur := memCurrentBytes(fields["MemoryCurrent"])
+	if !haveCur {
+		return "-"
+	}
+	shown := formatUintBytes(cur)
+	// 读得到 cgroup 原生接口时改用 working set（剔除可回收页缓存）
+	if stat, ok := readMemoryStat(filepath.Join(cgroupBase, "system.slice", unitName, "memory.stat")); ok {
+		if ws, ok2 := workingSetBytes(cur, stat); ok2 {
+			shown = formatUintBytes(ws)
+		}
+	}
+	if svc.MemoryMax == "" {
+		return shown
+	}
+	max, ok := parseByteSize(svc.MemoryMax)
+	if !ok {
+		return shown + " / " + svc.MemoryMax // infinity 等解析不了的上限原样展示
+	}
+	shown += " / " + formatUintBytes(max)
+	// 上限占用比用含页缓存的 current 计算：systemd 判超限/OOM 用的就是这个数，
+	// 与主数（working set，已剔除可回收缓存）口径不同，故只作为"离上限还有多远"的比值。
+	if mark, colors := memoryWarn(cur * 100 / max); mark != "" {
+		if !on {
+			colors = nil // 颜色关闭时只留 ASCII 标记（管道/重定向场景）
+		}
+		shown = colors.Sprint(shown + mark)
+	}
+	return shown
+}
+
+// pidOrDash 主进程 PID：未运行/未启动时 systemd 给 0 或空，展示为 "-" 而不是无意义的 0。
+func pidOrDash(pid string) string {
+	if pid == "" || pid == "0" {
+		return "-"
+	}
+	return pid
+}
+
+// memoryWarn 按内存用量比（current / memory_max，百分比）返回警示标记与配色：
+//   - >=90% 红色 "!!"：离被内核杀掉只剩一点余量
+//   - 80%~90% 黄色 "!"：偏高，值得看一眼
+//   - 其余不警示，避免正常服务的输出里全是噪声
+func memoryWarn(pct uint64) (string, text.Colors) {
+	switch {
+	case pct >= 90:
+		return " !! 接近上限", text.Colors{text.FgRed}
+	case pct >= 80:
+		return " ! 用量偏高", text.Colors{text.FgYellow}
+	}
+	return "", nil
+}
+
+// workingSetBytes 按 Kubernetes working set 同口径算服务"真正需要"的内存：
+// memory.current 减去 memory.stat 的 inactive_file（内核可随时回收的页缓存）。
+// 业务读写磁盘文件时，页缓存会被记到第一个触碰它的 cgroup 的 memory.current 上，
+// 直接用 current 会把 300M 文件缓存算进"内存占用"，且这个数还会随内核回收动作来回抖动。
+func workingSetBytes(current uint64, stat map[string]uint64) (uint64, bool) {
+	if stat == nil {
+		return 0, false
+	}
+	ws := current
+	if f := stat["inactive_file"]; f < ws {
+		ws -= f
+	}
+	return ws, true
+}
+
+// readMemoryStat 解析 cgroup v2 的 memory.stat（每行 "键 数值"，数值单位字节）。
+// 文件不存在或不可读时 ok=false，调用方回退 systemd 口径。
+func readMemoryStat(path string) (map[string]uint64, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	out := make(map[string]uint64, 16)
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		if v, err := strconv.ParseUint(f[1], 10, 64); err == nil {
+			out[f[0]] = v
+		}
+	}
+	return out, len(out) > 0
+}
+
+// memCurrentBytes 解析 systemctl show 的 MemoryCurrent。
+// 非数值（未取到）与 systemd 未启用内存统计时的哨兵值（接近 2^64）都返回 ok=false。
+func memCurrentBytes(s string) (uint64, bool) {
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil || n >= 1<<50 {
+		return 0, false
+	}
+	return n, true
+}
+
+// parseByteSize 解析 systemd 的体积取值（1024 进制，可带小数与可选空格：500M、1.5 G、2048K）。
+// 认不出的写法（infinity、裸字节不合法等）返回 ok=false，由调用方原样展示。
+func parseByteSize(s string) (uint64, bool) {
+	s = strings.TrimSpace(s)
+	i := 0
+	for i < len(s) && (s[i] >= '0' && s[i] <= '9' || s[i] == '.') {
+		i++
+	}
+	n, err := strconv.ParseFloat(s[:i], 64)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	var mult uint64 = 1
+	switch strings.ToUpper(strings.TrimSpace(s[i:])) {
+	case "":
+	case "K", "KI", "KIB", "KB":
+		mult = 1 << 10
+	case "M", "MI", "MIB", "MB":
+		mult = 1 << 20
+	case "G", "GI", "GIB", "GB":
+		mult = 1 << 30
+	case "T", "TI", "TIB", "TB":
+		mult = 1 << 40
+	case "P", "PI", "PIP", "PB":
+		mult = 1 << 50
+	default:
+		return 0, false
+	}
+	return uint64(n * float64(mult)), true
 }
 
 // runningStates 是主进程可能仍在运行的状态集合，仅这些状态计算 UPTIME；
@@ -202,16 +369,8 @@ func valueOrDash(s string) string {
 	return s
 }
 
-// formatBytes 把字节数格式化为友好单位（K/M/G）；非数值或 systemd 未统计哨兵值原样处理。
-func formatBytes(s string) string {
-	n, err := strconv.ParseUint(s, 10, 64)
-	if err != nil {
-		return s // 非数值（"-" 或已格式化）原样返回
-	}
-	// systemd 未启用内存统计时 MemoryCurrent 为 2^64-1 哨兵值
-	if n >= 1<<50 {
-		return "-"
-	}
+// formatUintBytes 把字节数格式化为友好单位（G/M 保留一位小数，K 取整）。
+func formatUintBytes(n uint64) string {
 	switch {
 	case n >= 1<<30:
 		return fmt.Sprintf("%.1fG", float64(n)/(1<<30))
