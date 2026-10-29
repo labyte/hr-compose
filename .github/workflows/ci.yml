@@ -22,9 +22,12 @@ jobs:
         run: go test -race -cover ./...
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
+        # action v7 起才支持 golangci-lint v2（v9 用 node24 运行时）。版本钉在 v2.15 而非 latest，
+        # 与本地开发环境同版本；配置格式必须与 linter 大版本一致（.golangci.yml 是 version 2），
+        # 且 action 默认会按所装版本的 JSON Schema 校验配置，两者不能分开切。
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.15
 
       - name: Cross-compile
         run: make cross

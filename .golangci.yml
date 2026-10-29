@@ -1,12 +1,42 @@
+# golangci-lint 配置（version 2 格式，工具为 golangci-lint v2 线；CI 用 golangci-lint-action@v9）。
+# 检查集刻意与升级前的 v1 保持一致，不新增噪音：
+#   linters    errcheck / govet / ineffassign / staticcheck / unused（即 v2 默认的 standard 集，
+#              v1 默认集里的 deadcode 已删除、由 unused 覆盖，gosimple 已并入 staticcheck）
+#   formatters gofmt / goimports（v2 把格式化器从 linters 挪到独立的 formatters 段）
+version: "2"
+
 run:
+  # v2 默认不设超时，显式保留 v1 的 5m，避免 CI 卡死时无限挂着。
   timeout: 5m
 
 linters:
+  settings:
+    staticcheck:
+      # v1 的 staticcheck 不跑 QF*（quickfix）类检查，关掉以保持既有检查集，
+      # 否则 validateServiceName / validateProjectName 的 !(...) 写法会新报 QF1001。
+      checks: ["all", "-QF*"]
+  exclusions:
+    # 以下 exclusions 由 `golangci-lint migrate` 生成，对应 v1 隐式生效的
+    # issues.exclude-use-default。v2 不再自动应用，删掉 presets 里的
+    # std-error-handling 会立刻冒出 fmt.Fprintf(stdout, ...) 一类 errcheck 报错。
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+
+formatters:
   enable:
     - gofmt
     - goimports
-    - govet
-    - staticcheck
-    - errcheck
-    - ineffassign
-    - unused
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
