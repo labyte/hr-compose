@@ -32,6 +32,11 @@ func Name(project, service string) string {
 // Generate 把服务配置渲染成 systemd unit 文本。project 是项目名（unit 文件名前缀），
 // depends_on 引用的同 project 服务依赖名也带上前缀。
 func Generate(name string, svc *config.Service, project string) (*Generated, error) {
+	// 字段值里的换行会往 unit 里另起一行注入额外指令（如 Description 带换行可在 [Unit] 段塞入
+	// ExecStartPre=），渲染前先拒绝。config.Load 已校验过，这里给绕过 Load 直接构造 Config 的调用方兜底。
+	if err := config.ValidatePassthrough(name, svc); err != nil {
+		return nil, err
+	}
 	var b strings.Builder
 	b.WriteString(ManagedMark + " -- 由 hr-compose 生成，请勿手动编辑，改动会被覆盖\n")
 

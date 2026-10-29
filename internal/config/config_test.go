@@ -487,3 +487,50 @@ services:
 		t.Fatal("environment 含换行应被拒绝（unit 注入）")
 	}
 }
+
+func TestRejectNewlineInAllPassthroughFields(t *testing.T) {
+	// 凡是值被原样拼进 unit 行的字段，换行都等于往 unit 里另起一行注入 systemd 指令：
+	// description 带换行可在 [Unit] 段塞出 [Service]/ExecStartPre=（真机验证过跨段注入成立）。
+	// 这里逐字段覆盖，新增透传字段时须同步加进来（config.passthroughValues 是唯一登记表）。
+	fields := []string{
+		"description", "working_dir", "user", "group", "restart",
+		"stop_signal", "memory_max", "cpu_quota", "std_output", "log_file",
+	}
+	for _, f := range fields {
+		p := writeFixture(t, `
+name: testproj
+services:
+  api:
+    command: /opt/myapp/api
+    `+f+`: "合法值\nExecStartPre=/bin/touch /tmp/proof"
+`)
+		if _, err := Load(p); err == nil {
+			t.Errorf("%s 含换行应被拒绝（unit 注入）", f)
+		}
+	}
+}
+
+func TestAcceptMultilineFreeValues(t *testing.T) {
+	// 反向用例：常规写法（含空格、中文、路径、systemd 取值语法）不应被换行校验误伤
+	p := writeFixture(t, `
+name: testproj
+services:
+  api:
+    description: 主业务 API 服务 (v2)
+    command: /opt/myapp/api --config /etc/myapp/api.conf
+    working_dir: /opt/myapp
+    user: appuser
+    group: appgroup
+    restart: on-failure
+    stop_signal: SIGTERM
+    memory_max: 500M
+    cpu_quota: 80%
+    std_output: append:/data/logs/api.log
+    log_file: /data/logs/api.log
+    environment:
+      - DB_ADDR=127.0.0.1:3306
+`)
+	if _, err := Load(p); err != nil {
+		t.Fatal(err)
+	}
+}

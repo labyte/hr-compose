@@ -204,13 +204,8 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(svc.Command) == "" {
 			return fmt.Errorf("服务 %q 缺少必填字段 command", name)
 		}
-		if err := validateNoNewline(name, "command", svc.Command); err != nil {
+		if err := ValidatePassthrough(name, svc); err != nil {
 			return err
-		}
-		for _, env := range svc.Environment {
-			if err := validateNoNewline(name, "environment", env); err != nil {
-				return err
-			}
 		}
 		for _, dep := range svc.DependsOn {
 			if _, ok := c.Services[dep]; !ok {
@@ -222,6 +217,53 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// passthroughValues 列出所有会原样拼进 systemd unit 行的字符串字段（field = yml 字段名，value = 用户写的值）。
+// 这些字段的值直接透传给 systemd 不做翻译，换行/回车等于在 unit 文件里另起一行——可在 [Unit] 段注入
+// [Service]、ExecStartPre= 等额外指令（真机已验证跨段注入成立）。校验必须覆盖每一个透传字段：
+// 新增透传字段时同步在此登记，否则等于重新打开注入口。
+// 数值字段（restart_sec、stop_timeout、start_delay、start_timeout）由 int 承载，无注入面，不列入。
+func passthroughValues(svc *Service) []namedValue {
+	out := []namedValue{
+		{"description", svc.Description},
+		{"command", svc.Command},
+		{"working_dir", svc.WorkingDir},
+		{"user", svc.User},
+		{"group", svc.Group},
+		{"restart", svc.Restart},
+		{"stop_signal", svc.StopSignal},
+		{"memory_max", svc.MemoryMax},
+		{"cpu_quota", svc.CPUQuota},
+		{"std_output", svc.StdOutput},
+		{"log_file", svc.LogFile},
+	}
+	// environment 是多条列表项，每项单独作为一行 Environment= 的值
+	for _, env := range svc.Environment {
+		out = append(out, namedValue{"environment", env})
+	}
+	return out
+}
+
+// ValidatePassthrough 校验 svc 全部透传字段不含换行/回车。供 Validate 使用，也导出给 unit 包
+// 在生成前做第二道防线：绕过 Load 直接构造的 Config（单测、被其他程序复用）同样不能把带换行的
+// 值写进 unit 文件。name 是服务名，仅用于报错定位。
+func ValidatePassthrough(name string, svc *Service) error {
+	if svc == nil {
+		return fmt.Errorf("服务 %q 配置为空", name)
+	}
+	for _, f := range passthroughValues(svc) {
+		if err := validateNoNewline(name, f.field, f.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// namedValue 是字段名与其取值的配对，供校验遍历。
+type namedValue struct {
+	field string
+	value string
 }
 
 // validateServiceName 限制服务名字符集：服务名会成为 unit 文件名。

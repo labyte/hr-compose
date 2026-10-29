@@ -205,6 +205,22 @@ func TestGenerateDefaultDescription(t *testing.T) {
 	}
 }
 
+func TestGenerateRejectsNewlineInjection(t *testing.T) {
+	// config.Load 已拦掉带换行的透传字段；这里覆盖"绕过 Load 直接构造 Service"的调用方
+	// （单测、被其他程序复用），保证 unit 文本任何一行都不可能来自值里的换行。
+	for _, svc := range []*config.Service{
+		{Command: "/bin/x", Description: "合法描述\n[Service]\nExecStartPre=/bin/touch /tmp/proof"},
+		{Command: "/bin/x\nExecStartPre=/bin/touch /tmp/proof"},
+		{Command: "/bin/x", Environment: []string{"FOO=1\nExecStart=/bin/evil"}},
+		{Command: "/bin/x", WorkingDir: "/opt\n[Service]"},
+		{Command: "/bin/x", MemoryMax: "500M\nExecStartPre=/bin/evil"},
+	} {
+		if _, err := Generate("api", svc, ""); err == nil {
+			t.Errorf("含换行的字段值不应生成 unit: %+v", svc)
+		}
+	}
+}
+
 func TestName(t *testing.T) {
 	if got := Name("", "api"); got != "api.service" {
 		t.Errorf(`Name("", "api") = %q, want api.service`, got)
