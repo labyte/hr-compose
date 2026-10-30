@@ -138,10 +138,27 @@ var systemdResults = map[string]string{
 	"oom-kill":        "systemd Result=oom-kill：内存超限被内核杀掉（memory_max）",
 }
 
+// execMainExited 判断 ExecMainCode 是否表示"主进程自己退出"（区别于被信号杀死 / core dump）——
+// 只有这种情况 ExecMainStatus 才是退出码，才能套 systemdExecCodes。
+// 两种取值形式都得认：`systemctl show` 按 D-Bus 的 int32 原样打印，取的是 glibc 的 SIGCHLD
+// si_code（1=CLD_EXITED、2=CLD_KILLED、3=CLD_DUMPED），systemd 255 与 259 实测都是这个形式；
+// 字符串 `exited` 只出现在 `systemctl status` 的 "code=exited, status=203/EXEC" 和
+// `ExecStart={ … code=exited ; status=203 }` 里。只按字符串判断的话 200/203/217 这些 exec
+// 前置阶段的专用码永远翻不出来，用户只能看到泛化的 "Result=exit-code"，指不到该改哪个字段
+// （e2e 在 GitHub runner 上实测：ExecMainCode=1、ExecMainStatus=203）。
+func execMainExited(code string) bool {
+	switch code {
+	case "1", "exited": // 1 = CLD_EXITED
+		return true
+	default:
+		return false
+	}
+}
+
 // failureNote 取 systemd 自己对失败原因的说明（优先 exec 前置阶段的专用退出码，其次 Result），
 // 返回不带括号的裸短语；取不到有效信息时返回空串，绝不编造。
 func failureNote(fields map[string]string) string {
-	if fields["ExecMainCode"] == "exited" {
+	if execMainExited(fields["ExecMainCode"]) {
 		if m, ok := systemdExecCodes[fields["ExecMainStatus"]]; ok {
 			return m
 		}

@@ -200,13 +200,27 @@ func TestFailureNoteUsesSystemdOwnAccounting(t *testing.T) {
 			t.Errorf("退出码 %s 应指向 %q，got %q", status, want, got)
 		}
 	}
+	// `systemctl show` 把 ExecMainCode 打成原始整数（glibc 的 SIGCHLD si_code，1=CLD_EXITED），
+	// 不是 `systemctl status` 里的字符串 exited——这才是真机/CI 上的实际形式，同样要翻出专用码
+	for status, want := range map[string]string{
+		"203": "command",
+		"200": "working_dir",
+		"217": "user",
+	} {
+		if got := failureNote(map[string]string{"ExecMainCode": "1", "ExecMainStatus": status}); !strings.Contains(got, want) {
+			t.Errorf("ExecMainCode=1 时退出码 %s 应指向 %q，got %q", status, want, got)
+		}
+	}
 	// 业务进程自己的退出码不属 systemd 专用码，不擅自解释
 	if got := failureNote(map[string]string{"ExecMainCode": "exited", "ExecMainStatus": "1"}); got != "" {
 		t.Errorf("不该解释业务退出码，got %q", got)
 	}
-	// ExecMainCode 不是 exited（如被信号杀）时不套用退出码表
-	if got := failureNote(map[string]string{"ExecMainCode": "killed", "ExecMainStatus": "203"}); got != "" {
-		t.Errorf("code=killed 时不该按退出码表解释，got %q", got)
+	// 非"自己退出"（2=CLD_KILLED、3=CLD_DUMPED，或字符串形式）时 ExecMainStatus 是信号号，
+	// 不套退出码表；0/空表示没有退出信息，同样不解释
+	for _, code := range []string{"2", "3", "killed", "dumped", "0", ""} {
+		if got := failureNote(map[string]string{"ExecMainCode": code, "ExecMainStatus": "203"}); got != "" {
+			t.Errorf("ExecMainCode=%q 时不该按退出码表解释，got %q", code, got)
+		}
 	}
 	// Result 是 systemd 的失败口径，oom-kill 要指回 memory_max
 	if got := failureNote(map[string]string{"Result": "oom-kill"}); !strings.Contains(got, "memory_max") {
@@ -217,6 +231,25 @@ func TestFailureNoteUsesSystemdOwnAccounting(t *testing.T) {
 		if got := failureNote(f); got != "" {
 			t.Errorf("无失败信息时不该有补充，got %q", got)
 		}
+	}
+}
+
+// TestNotRunningReasonRunnerFields 用 GitHub runner（ubuntu-26.04 / systemd 259）上实测到的
+// 字段组合复现"command 不存在 + 进入 auto-restart"：ExecMainCode 是整数 1 而非字符串 exited，
+// NRestarts 仍为 0（重启计数要等 RestartSec 到点、restart 作业入队后才加）。
+// e2e 的 `grep -q 203` 断言曾长期不过，就是卡在这两个字段的实际形式上。
+func TestNotRunningReasonRunnerFields(t *testing.T) {
+	got := notRunningReason(map[string]string{
+		"LoadState": "loaded", "ActiveState": "activating", "SubState": "auto-restart",
+		"Result": "exit-code", "NRestarts": "0", "ExecMainCode": "1", "ExecMainStatus": "203",
+	})
+	for _, want := range []string{"203", "command"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("reason = %q，期望含 %q", got, want)
+		}
+	}
+	if strings.Contains(got, "已重启") {
+		t.Errorf("NRestarts=0 时不该说已重启，got %q", got)
 	}
 }
 
