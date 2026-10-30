@@ -49,7 +49,6 @@ func (e *Engine) Up(names ...string) error {
 	// 第一趟：生成并写入全部 target 的 unit（幂等，仅在内容变化时重写），期间不 reload。
 	// 生成产物与写入结果记下来给第二趟复用，避免重复渲染 unit。
 	plan := make([]upTarget, 0, len(targets))
-	units := make([]string, 0, len(targets))
 	for _, name := range targets {
 		g, err := unit.Generate(name, e.cfg.Services[name], e.cfg.Name)
 		if err != nil {
@@ -60,16 +59,21 @@ func (e *Engine) Up(names ...string) error {
 			return err
 		}
 		plan = append(plan, upTarget{name: name, unitPath: g.UnitPath, write: action})
-		units = append(units, g.UnitPath)
 	}
 
 	// 有 unit 被重写时，取"写入前的运行状态"用于判断该 restart 还是 start。
 	// 只改文件不影响运行中的进程，daemon-reload 之前取与之后取对 ActiveState 等价，故放在 reload 前。
+	// 状态查不到时不能退回 start：start 对 active 的 unit 是 no-op，新配置进不了进程，
+	// 而 up 仍会打印"已启动"——等于把静默失败说成成功。改按 restart 处理：服务停着时
+	// restart 即启动，在跑时才会把新配置带进进程，两种情况都得到"运行中"的终态，
+	// 代价只是可能多一次无害重启。fetchStates 已带"批量失败则逐服务查询"的回退。
 	if anyReplaced(plan) {
-		if states, err := e.sys.ShowMany(units); err == nil {
-			for i := range plan {
-				plan[i].wasRunning = stateIsRunning(states[plan[i].unitPath])
-			}
+		states, err := e.fetchStates(targets)
+		if err != nil {
+			fmt.Fprintf(stdout, "警告：查询运行状态失败，改动的服务本次按 restart 处理（%v）\n", err)
+		}
+		for i := range plan {
+			plan[i].wasRunning = err != nil || stateIsRunning(states[plan[i].unitPath])
 		}
 	}
 

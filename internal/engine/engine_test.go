@@ -727,3 +727,103 @@ func TestUnitNamePrefix(t *testing.T) {
 		}
 	}
 }
+
+// brokenThenOKSys 让前 remain 次状态查询（批量与逐服务都计数）失败，之后恢复正常，
+// 模拟 systemctl 瞬时不可用（连不上总线、超时等）。
+type brokenThenOKSys struct {
+	stateSys
+	remain int
+}
+
+func newBrokenThenOKSys(states map[string]string, remain int) *brokenThenOKSys {
+	return &brokenThenOKSys{stateSys: stateSys{states: states}, remain: remain}
+}
+
+// broken 消费一次"失败额度"，用完即恢复正常。
+func (s *brokenThenOKSys) broken() bool {
+	if s.remain > 0 {
+		s.remain--
+		return true
+	}
+	return false
+}
+
+func (s *brokenThenOKSys) Show(u string) (map[string]string, error) {
+	if s.broken() {
+		return nil, errors.New("systemctl show " + u + ": exit status 1\nFailed to connect to bus: Host is down")
+	}
+	return s.stateSys.Show(u)
+}
+
+func (s *brokenThenOKSys) ShowMany(units []string) (map[string]map[string]string, error) {
+	if s.broken() {
+		return nil, errors.New("systemctl show: exit status 1\nFailed to connect to bus: Host is down")
+	}
+	return s.stateSys.ShowMany(units)
+}
+
+// showFailSys 状态查询恒失败（批量与逐服务都失败），模拟 systemctl 整体不可用。
+type showFailSys struct {
+	fakeSys
+}
+
+func (s *showFailSys) Show(u string) (map[string]string, error) {
+	return nil, errors.New("systemctl show " + u + ": exit status 1\nFailed to connect to bus: Host is down")
+}
+
+func (s *showFailSys) ShowMany(units []string) (map[string]map[string]string, error) {
+	return nil, errors.New("systemctl show: exit status 1\nFailed to connect to bus: Host is down")
+}
+
+func TestUpRestartsWhenStateQueryTransientlyFails(t *testing.T) {
+	// unit 内容已变但运行状态查不到时，不能退回 start：start 对 active 的 unit 是 no-op，
+	// 新配置进不了正在跑的进程，而 up 仍会打印"已启动"——把静默失败说成成功。
+	// restart 在两种情况下都得到"运行中"的终态（停着的服务 restart 即启动），是保守正确的选择。
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	writeUnitFile(t, "api", &config.Service{Command: "/x/old"}, "")
+	// 写入前服务在运行；前两次状态查询（ShowMany + 回退的 Show）失败，之后恢复
+	fake := newBrokenThenOKSys(map[string]string{"api.service": "active"}, 2)
+	cfg := &config.Config{Services: map[string]*config.Service{"api": {Command: "/x/new"}}}
+	out := capturePsOutput(t)
+	if err := New(cfg, fake).Up(); err != nil {
+		t.Fatal(err)
+	}
+	if !hasAction(fake.actions, "restart api.service") {
+		t.Errorf("查不到运行状态时应按 restart 处理，动作序列 %v", fake.actions)
+	}
+	if hasAction(fake.actions, "start api.service") {
+		t.Errorf("不应退回 start（对 active unit 是 no-op，新配置不生效），动作序列 %v", fake.actions)
+	}
+	if s := out.String(); !strings.Contains(s, "警告") || !strings.Contains(s, "restart") {
+		t.Errorf("查询失败应如实告警并说明改用 restart，输出:\n%s", s)
+	}
+}
+
+func TestUpRestartAndReportWhenStateQueryUnavailable(t *testing.T) {
+	// 状态一直查不到时：动作仍按 restart（保守正确），但 up 必须把"复核不了"如实报错，
+	// 不能只打印"已启动"就退出 0。
+	old := UnitDir
+	UnitDir = t.TempDir()
+	defer func() { UnitDir = old }()
+
+	writeUnitFile(t, "api", &config.Service{Command: "/x/old"}, "")
+	fake := &showFailSys{}
+	cfg := &config.Config{Services: map[string]*config.Service{"api": {Command: "/x/new"}}}
+	capturePsOutput(t)
+	err := New(cfg, fake).Up()
+	if err == nil {
+		t.Fatal("状态复核查不到时 up 应返回错误")
+	}
+	if !strings.Contains(err.Error(), "复核服务状态") {
+		t.Errorf("错误应说明是复核环节查不到状态，got: %v", err)
+	}
+	if !hasAction(fake.actions, "restart api.service") {
+		t.Errorf("查不到运行状态时应按 restart 处理，动作序列 %v", fake.actions)
+	}
+	if hasAction(fake.actions, "start api.service") {
+		t.Errorf("不应退回 start，动作序列 %v", fake.actions)
+	}
+}
