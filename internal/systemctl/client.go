@@ -2,6 +2,7 @@
 package systemctl
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -35,10 +36,11 @@ func (c *Real) DaemonReload() error       { return run("systemctl", "daemon-relo
 
 // Show 读取单个 unit 的状态字段（ActiveState / SubState / MainPID / MemoryCurrent 等）。
 // 使用 systemctl show 文本输出，兼容老版本 systemd（不依赖 --output=json）。
+// 失败时经 execErr 带上 stderr，让上层能告诉用户"为什么读不到状态"。
 func (c *Real) Show(unit string) (map[string]string, error) {
 	out, err := exec.Command("systemctl", "show", unit, "--no-pager").Output()
 	if err != nil {
-		return nil, err
+		return nil, execErr("systemctl", []string{"show", unit, "--no-pager"}, err)
 	}
 	fields := make(map[string]string)
 	for _, line := range strings.Split(string(out), "\n") {
@@ -87,7 +89,8 @@ func (c *Real) ShowMany(units []string) (map[string]map[string]string, error) {
 		}
 	}
 	if err != nil && len(result) == 0 {
-		return nil, err
+		// 错误里只带 show 与 unit 名：-p 属性列表是内部实现细节，塞进消息只会淹没真正的原因。
+		return nil, execErr("systemctl", append([]string{"show"}, units...), err)
 	}
 	return result, nil
 }
@@ -107,4 +110,20 @@ func run(name string, args ...string) error {
 		return fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// execErr 把一次失败的外部命令包装成"命令 + 原因"的错误。
+// Show/ShowMany 用 Output() 只取 stdout，失败时 stderr 在 *exec.ExitError.Stderr 里；
+// 直接返回原 err 的话上层只剩 "exit status 1"，用户看不出是连不上 systemd、权限不足，
+// 还是 unit 不存在（ps/config 这类只读命令尤其明显，它们不会打印别的上下文）。
+func execErr(name string, args []string, err error) error {
+	cmdline := name
+	if len(args) > 0 {
+		cmdline += " " + strings.Join(args, " ")
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+		return fmt.Errorf("%s: %w\n%s", cmdline, err, strings.TrimSpace(string(exitErr.Stderr)))
+	}
+	return fmt.Errorf("%s: %w", cmdline, err)
 }
