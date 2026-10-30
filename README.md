@@ -163,7 +163,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 
 MEMORY 读不到 cgroup 原生接口时（cgroup v1、混合层级或无权限）自动回退 systemd 的 `MemoryCurrent`；unit 未安装、未启用内存统计（systemd 报 `[not set]` 或 2^64 哨兵值）时统一显示 `-`，不会把 systemd 的内部字面量透出来。
 
-unit 实际文件路径不在此展示，用 `hr-compose config` 预览时会在段头标注完整路径（如 `/etc/systemd/system/<服务名>.service`）；`config --real` 直接展示磁盘上已安装的 unit 文件内容，可与预览对比差异。
+unit 实际文件路径不在此展示，用 `hr-compose config` 预览时会在段头标注完整路径（如 `/etc/systemd/system/<name>-<service>.service`）；`config --real` 直接展示磁盘上已安装的 unit 文件内容，可与预览对比差异。
 
 开机启动状态用 `enable` / `disable` 命令修改（`up` 会自动 enable，`down` 会 disable）。
 
@@ -295,7 +295,7 @@ services:
 - **删除/覆盖保护**：unit 文件头部有 `# MANAGED BY hr-compose` 标记；`down` 只删除带该标记的文件，`up` 也不会覆盖非该标记的同名 unit——防止误删/误覆盖同名系统服务。如确需让 hr-compose 托管某个同名 unit，先删除原文件再 `up`。
 - **`std_output` 默认丢弃输出**：未配置时生成 `StandardOutput=null`，日志由业务程序自行管理；要进 journald 需显式 `std_output: journal`。丢弃输出直接裸写 `std_output: null` 即可（无需加引号）；`none` 为兼容旧写法。
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize，否则 systemd 会认为服务未启动。
-- **改完配置要重新 `up`**：`systemctl start` 对已 active 的 unit 是 no-op，只 `daemon-reload` 不重启的话新配置对运行中的进程不生效。`up` 在 unit 内容变化且服务正在运行时自动改用 `restart`；内容没变时幂等跳过，不会白重启。
+- **改完配置要重新 `up`**：`systemctl start` 对已 active 的 unit 是 no-op，只 `daemon-reload` 不重启的话新配置对运行中的进程不生效。`up` 在 unit 内容变化且服务正在运行时自动改用 `restart`；内容没变时幂等跳过，不会白重启。查不到运行状态时（systemctl 不可用、连不上总线等）也按 `restart` 处理并打印一行警告——退回 `start` 会让改动静默失效却仍报"已启动"。
 - **`up`/`start`/`restart` 会复核启动结果**：`systemctl start` 返回 0 只代表 systemd 受理了任务，`command` 路径不存在时它照样返回 0（`Restart=always` 使服务进入 auto-restart 循环）。三个命令收尾都读 systemd 状态复核：复核通过才打印 OK，进程没活着的服务逐条报出原因（转述 systemd 自己的口径，如 `退出码 203/EXEC：command 指定的可执行文件不存在或不可执行`、`Result=start-limit-hit`、`oom-kill` 指向 `memory_max`）并让命令以非 0 退出。`up` 单个服务失败不中断其余服务；`start`/`restart` 遇到 systemctl 直接报错（如 unit 不存在、权限不足）则不再提交后续服务。仍在启动过程中（如 `start_delay` 计时中）不算失败。
 - **project 由 `name` 界定**：工具只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统上其他 unit；同一 `name:` 下的 unit 归属该 project，不同 project 互不影响。
 - **从旧版升级（破坏性）**：`name` 为必填，旧 yml 需补 `name:` 才能继续使用；且 unit 文件名由 `<service>.service` 变为 `<name>-<service>.service`，旧 unit 不会被新版 `down` 清理——升级前先 `down` 旧服务（或手动 `systemctl stop/disable <svc>.service` 并删除对应文件），再用新版 `up`。
@@ -308,8 +308,10 @@ services:
 ```bash
 hr-compose config            # 校验 yml、预览生成的 unit 内容
 hr-compose config --real     # 查看磁盘上实际的 unit 文件内容，对比是否与预览一致
-systemctl status <svc>.service   # 查看 systemd 层面的真实状态
-journalctl -u <svc>.service      # 查看 journal 日志
+# 注意：unit 文件名带 project 前缀，是 <name>-<服务名>.service（name 为 yml 顶层的项目名），
+# 直接写 <服务名>.service 会得到 "Unit xxx.service could not be found."
+systemctl status <name>-<svc>.service   # 查看 systemd 层面的真实状态
+journalctl -u <name>-<svc>.service      # 查看 journal 日志
 ```
 
 ---
