@@ -147,6 +147,11 @@ func memoryCell(unitName string, svc *config.Service, fields map[string]string, 
 		return shown + " / " + svc.MemoryMax // infinity 等解析不了的上限原样展示
 	}
 	shown += " / " + formatUintBytes(max)
+	// 上限解析为 0（memory_max: "0" / "0K" 一类）时不计算占用比：除数为 0 会让只读的 ps 直接 panic。
+	// 0 上限本身是无效配置（systemd 语义等于不允许占用任何内存），展示上限即可，警示交给 up 的启动复核。
+	if max == 0 {
+		return shown
+	}
 	// 上限占用比用含页缓存的 current 计算：systemd 判超限/OOM 用的就是这个数，
 	// 与主数（working set，已剔除可回收缓存）口径不同，故只作为"离上限还有多远"的比值。
 	if mark, colors := memoryWarn(cur * 100 / max); mark != "" {

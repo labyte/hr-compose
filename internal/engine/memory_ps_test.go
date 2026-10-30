@@ -239,3 +239,35 @@ func TestPsMemoryColumnWithLimit(t *testing.T) {
 		t.Errorf("colorOverride=never 时不应有 ANSI 码:\n%s", out)
 	}
 }
+
+func TestMemoryCellZeroLimitNoPanic(t *testing.T) {
+	// memory_max 写成 "0" / "0K" / "0.0M" 一类时上限解析为 0：ps 是只读命令，
+	// 用 current*100/max 算占用比会整数除零 panic（曾实测复现）。
+	// 上限本身无效（systemd 语义等于不允许占用内存），展示 " / 0B" 即可，警示交给 up 的启动复核。
+	defer fakeCgroup(t, "api.service", "inactive_file 0\n")()
+	fields := map[string]string{"MemoryCurrent": "300000000"} // ≈286.1M
+	for _, limit := range []string{"0", "0K", "0.0M"} {
+		got := memoryCell("api.service", &config.Service{MemoryMax: limit}, fields, false)
+		if got != "286.1M / 0B" {
+			t.Errorf("上限 %q 应展示用量与 0 上限，got %q", limit, got)
+		}
+		if strings.Contains(got, "!") {
+			t.Errorf("上限 %q 时不应计算占用比、不应有警示标记，got %q", limit, got)
+		}
+	}
+}
+
+func TestPsWithZeroMemoryMaxNoPanic(t *testing.T) {
+	// 端到端兜底：整表渲染路径（Ps → renderPs → memoryCell）同样不得 panic。
+	out := capturePsOutput(t)
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api": {Command: "/x/api", MemoryMax: "0"},
+	}}
+	if err := New(cfg, &fakeSys{}).Ps(); err != nil {
+		t.Fatal(err)
+	}
+	// fakeSys 的 MemoryCurrent=1048576（1.0M）
+	if s := out.String(); !strings.Contains(s, "1.0M / 0B") {
+		t.Errorf("ps 应展示用量与 0 上限，输出:\n%s", s)
+	}
+}
