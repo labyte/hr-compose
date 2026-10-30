@@ -85,6 +85,18 @@ YAML
 rc=0
 out="$(sudo "$BIN" up 2>&1)" || rc=$?
 printf '%s\n' "$out" | sed 's/^/   /'
+# 断言前把 systemd 自己的原始字段打出来。本仓库的 e2e 跑在 GitHub runner 上，systemd
+# 版本由镜像决定、不受我们控制，而"exec 失败后进入 auto-restart"这一状态下
+# ExecMainCode/ExecMainStatus 是否仍留着 203 各版本表现并不一致；断言不过时直接看这段
+# 就能定位，不必为拿数据再跑一轮 CI。awk/sed 恒返回 0，不会因字段缺失触发 pipefail。
+echo "   -- systemd 原始字段：$(systemctl --version | head -1)"
+systemctl show smoke-bad-bad.service --no-pager |
+  awk '/^(LoadState|ActiveState|SubState|Result|ExecMainCode|ExecMainStatus|NRestarts)=/ {print "   单查 " $0}'
+{
+  systemctl show --no-pager -p Id -p ActiveState -p SubState -p Result \
+    -p ExecMainCode -p ExecMainStatus -p NRestarts \
+    smoke-bad-good.service smoke-bad-bad.service || true
+} | sed 's/^/   批量 /'
 test "$rc" != 0
 # 用 here-string 而非管道喂 grep：grep -q 命中即退出，管道上游可能吃到 SIGPIPE，
 # 叠加 pipefail 会让"应当命中"的断言假失败。
