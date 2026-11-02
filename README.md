@@ -165,6 +165,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | **PID** | `MainPID` | 主进程 PID；未运行（systemd 报 0）时显示 `-` |
 | **MEMORY** | cgroup `memory.current` − `memory.stat` 的 `inactive_file` | 按 Kubernetes working set 同口径计算：扣掉内核可随时回收的页缓存，所以服务读写大文件不会被算成"内存占用"，数值也不会随内核回收动作来回抖动。扣掉的那部分另以 `(+缓存)` 标出（如 `9.1M (+286.1M 缓存)`），两者相加就是 `memory.current`，也就是 systemd 判超限/OOM 用的数——不标出来就会出现"用量只有 9.1M 却提示接近上限"这种看不懂的组合；缓存为 0 时不显示该段。配了 `memory_max` 时再追加 ` / 上限`，用量（含页缓存的 `memory.current` 与上限之比）达 80% 标 `! 用量偏高`、90% 标 `!! 接近上限` 并着色 |
 | **UPTIME** | `ExecMainStartTimestampMonotonic` | 主进程已运行时长（`45s` / `5m` / `2h` / `3d`）；服务重启后从头累计，可据此判断是否重启过；停止/失败/未启动的服务显示 `-` |
+| **DESCRIPTION** | yml 的 `description` | 最长 40 列（中文按 2 列计），超出部分**截断**并以 `...` 结尾，不折行——保证一个服务恒定占一行、表格边框对齐；完整描述看 `hr-compose.yml` 或 `hr-compose config` |
 
 MEMORY 读不到 cgroup 原生接口时（cgroup v1、混合层级或无权限）自动回退 systemd 的 `MemoryCurrent`——此时拆不出缓存，只展示单值、不带 `(+缓存)` 段；unit 未安装、未启用内存统计（systemd 报 `[not set]` 或 2^64 哨兵值）时统一显示 `-`，不会把 systemd 的内部字面量透出来。
 

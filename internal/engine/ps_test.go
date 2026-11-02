@@ -260,3 +260,68 @@ func TestPsNotInstalledShowsNotFound(t *testing.T) {
 		t.Errorf("未安装的服务不应展示 stopped\n%s", out)
 	}
 }
+
+func TestSnipToWidth(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		max  int
+		want string
+	}{
+		{"短于上限原样返回", "zs127", descWidthMax, "zs127"},
+		{"恰好等于上限原样返回", strings.Repeat("a", 40), 40, strings.Repeat("a", 40)},
+		{"超一个字符即截断补省略号", strings.Repeat("a", 41), 40, strings.Repeat("a", 37) + "..."},
+		// 汉字按 2 列计：18 个汉字 36 列 + "..." 3 列 = 39，再塞一个就超出 40 列
+		{"中文按显示宽度而非字符数截断", strings.Repeat("生", 25), 40, strings.Repeat("生", 18) + "..."},
+		{"空值原样返回", "", 40, ""},
+	}
+	for _, tc := range cases {
+		got := snipToWidth(tc.in, tc.max)
+		if got != tc.want {
+			t.Errorf("%s: snipToWidth = %q, want %q", tc.name, got, tc.want)
+		}
+		// 截断结果不得超过限定列宽，否则右边框会被顶歪
+		if w := text.StringWidthWithoutEscSequences(got); w > tc.max {
+			t.Errorf("%s: 结果显示宽度 %d 超过上限 %d（%q）", tc.name, w, tc.max, got)
+		}
+	}
+}
+
+// 描述过长时必须截断成一行，而不是 go-pretty 默认的折行——折行会让一个服务占多行、整表散架。
+func TestPsDescriptionTruncatedNotWrapped(t *testing.T) {
+	oldOut, oldOverride := stdout, colorOverride
+	stdout = &bytes.Buffer{}
+	colorOverride = "never"
+	defer func() { stdout, colorOverride = oldOut, oldOverride }()
+
+	longCJK := "反复读取磁盘上的大文件以制造可回收页缓存用于验证内存口径是否正常显示不出错"
+	longASCII := "a very long ascii description that surely exceeds the forty column limit"
+	// resolve 无参时按名排序：api、reader
+	out := runPs(t, map[string]*config.Service{
+		"api":    {Command: "/x/api", Description: longASCII},
+		"reader": {Command: "/x/read", Description: longCJK},
+	})
+
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	// 上边框 + 表头 + 表头分隔线 + 2 行数据 + 下边框 = 6 行；一旦折行，数据行会翻倍
+	if len(lines) != 6 {
+		t.Errorf("描述超长时每个服务仍应只占一行（期望 6 行，实得 %d 行）:\n%s", len(lines), out)
+	}
+	// 每行显示宽度必须一致，否则边框错位（中文按 2 列计，故用 go-pretty 的计宽函数）
+	border := text.StringWidthWithoutEscSequences(lines[0])
+	for i, l := range lines {
+		if w := text.StringWidthWithoutEscSequences(l); w != border {
+			t.Errorf("第 %d 行显示宽度 %d ≠ 边框 %d，表格错位:\n%s", i+1, w, border, out)
+		}
+	}
+	if !strings.Contains(out, "...") {
+		t.Errorf("超长描述应以省略号结尾:\n%s", out)
+	}
+	if strings.Contains(out, longCJK) || strings.Contains(out, longASCII) {
+		t.Errorf("超长描述应被截断，不该原样出现:\n%s", out)
+	}
+	// 短描述不受影响
+	if !strings.Contains(out, "NAME") || !strings.Contains(out, "DESCRIPTION") {
+		t.Errorf("表头缺失:\n%s", out)
+	}
+}

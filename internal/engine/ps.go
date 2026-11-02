@@ -71,6 +71,16 @@ func (e *Engine) fetchStates(names []string) (map[string]map[string]string, erro
 	return all, nil
 }
 
+// descWidthMax 是 DESCRIPTION 列的最大显示宽度（中文/全角字符按 2 列计）。
+const descWidthMax = 40
+
+// snipToWidth 是描述列的限宽器：超过 maxWidth 列就截断并以 "..." 结尾，**不换行**。
+// 交给 go-pretty 的 text.Snip 做——它按显示宽度计（一个汉字算 2 列）且计宽时剥离 ANSI
+// 转义码，不会截出"半个汉字"的宽度导致右边框错位。
+func snipToWidth(s string, maxWidth int) string {
+	return text.Snip(s, maxWidth, "...")
+}
+
 // renderPs 按给定状态数据渲染状态表（names 是展示顺序）。与 fetchStates 分开，
 // 便于 up 先查一次状态做启动复核、再用同一份数据画表，不重复调用 systemctl。
 func (e *Engine) renderPs(names []string, all map[string]map[string]string) error {
@@ -78,7 +88,9 @@ func (e *Engine) renderPs(names []string, all map[string]map[string]string) erro
 	t.SetOutputMirror(stdout)
 	t.AppendHeader(table.Row{"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME", "DESCRIPTION"})
 	t.SetColumnConfigs([]table.ColumnConfig{
-		{Number: 7, WidthMax: 40}, // 描述列限宽（默认 WidthMaxEnforcer=text.WrapText 换行）
+		// 描述列超长时截断而不是换行：默认的 text.WrapText 会把长描述折成两三行，
+		// 一个服务占多行，整表就散架、难以逐行扫读。完整描述见 hr-compose.yml 或 config 命令。
+		{Number: 7, WidthMax: descWidthMax, WidthMaxEnforcer: snipToWidth},
 	})
 	t.SetStyle(table.StyleLight)
 
