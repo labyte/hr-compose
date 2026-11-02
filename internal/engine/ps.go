@@ -25,7 +25,8 @@ var uptimeFile = "/proc/uptime"
 // （未定义的名字报错，顺序按依赖拓扑）。列：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME / DESCRIPTION，
 // 终端下状态列着色。STATUS=ActiveState、SubState 与 LoadState 合并（mergedState），
 // UPTIME=主进程运行时长（可判断是否重启过），ENABLED=UnitFileState（是否开机启动）。
-// MEMORY=working set（cgroup memory.current 扣掉可回收的 inactive_file），配了 memory_max 时附 " / 上限"。
+// MEMORY=working set（cgroup memory.current 扣掉可回收的 inactive_file，扣掉的量另以 "(+缓存)" 标出），
+// 配了 memory_max 时附 " / 上限"。
 // unit 实际文件路径见 config 命令预览。
 func (e *Engine) Ps(names ...string) error {
 	targets, err := e.resolve(names...)
@@ -123,20 +124,26 @@ func (e *Engine) renderPs(names []string, all map[string]map[string]string) erro
 // cgroup v1 或混合层级下该路径不存在，读不到时内存展示自动回退 systemd 的 MemoryCurrent。
 var cgroupBase = "/sys/fs/cgroup"
 
-// memoryCell 组装 ps 的 MEMORY 单元格，口径见 workingSetBytes。
-// 配置了 memory_max 时追加 " / <上限>"，并在用量逼近上限时给出警示标记/配色。
+// memoryCell 组装 ps 的 MEMORY 单元格，口径见 workingSetSplit：
+// 基本形态是 "<working set>"，读得到 cgroup 且存在可回收缓存时成 "<working set> (+<缓存>)"，
+// 配置了 memory_max 再追加 " / <上限>"，并在用量逼近上限时给出警示标记/配色。
 // 拿不到内存数据（unit 未安装、未启用 MemoryAccounting、systemd 输出字面量 "[not set]"、
-// 老版本的 2^64-1 哨兵值）时统一显示 "-"，不把 systemd 的内部字面量透给用户。
+// 老版本的 2^64-1 哨兵值）时统一显示 "-"（上限一并不显示），不把 systemd 的内部字面量透给用户。
 func memoryCell(unitName string, svc *config.Service, fields map[string]string, on bool) string {
 	cur, haveCur := memCurrentBytes(fields["MemoryCurrent"])
 	if !haveCur {
 		return "-"
 	}
 	shown := formatUintBytes(cur)
-	// 读得到 cgroup 原生接口时改用 working set（剔除可回收页缓存）
+	// 读得到 cgroup 原生接口时改用 working set（剔除可回收页缓存），并把扣掉的那部分单独标出来：
+	// 主数 + 缓存 = memory.current，正是下面算占用比、也是 systemd 判超限/OOM 用的口径，
+	// 否则"主数只有 9.1M 却标 !! 接近上限"看不出原因。读不到 cgroup 时不编造缓存数，只留单值。
 	if stat, ok := readMemoryStat(filepath.Join(cgroupBase, "system.slice", unitName, "memory.stat")); ok {
-		if ws, ok2 := workingSetBytes(cur, stat); ok2 {
+		if ws, cache, ok2 := workingSetSplit(cur, stat); ok2 {
 			shown = formatUintBytes(ws)
+			if cache > 0 { // 缓存为 0 时不加 "(+0B 缓存)" 这种噪声
+				shown += " (+" + formatUintBytes(cache) + " 缓存)"
+			}
 		}
 	}
 	if svc.MemoryMax == "" {
@@ -185,19 +192,21 @@ func memoryWarn(pct uint64) (string, text.Colors) {
 	return "", nil
 }
 
-// workingSetBytes 按 Kubernetes working set 同口径算服务"真正需要"的内存：
-// memory.current 减去 memory.stat 的 inactive_file（内核可随时回收的页缓存）。
+// workingSetSplit 按 Kubernetes working set 同口径算服务"真正需要"的内存：
+// memory.current 减去 memory.stat 的 inactive_file（内核可随时回收的页缓存），
+// 并把扣掉的那部分单独返回，供 ps 展示成 "用量 (+缓存)"。
 // 业务读写磁盘文件时，页缓存会被记到第一个触碰它的 cgroup 的 memory.current 上，
 // 直接用 current 会把 300M 文件缓存算进"内存占用"，且这个数还会随内核回收动作来回抖动。
-func workingSetBytes(current uint64, stat map[string]uint64) (uint64, bool) {
+// ws + cache 恒等于 current，也就是 systemd 判超限/OOM 用的那个数，两个口径因此可对账；
+// inactive_file >= current 的异常组合一律按"扣 0"处理，不让无符号减法下溢。
+func workingSetSplit(current uint64, stat map[string]uint64) (ws, cache uint64, ok bool) {
 	if stat == nil {
-		return 0, false
+		return 0, 0, false
 	}
-	ws := current
-	if f := stat["inactive_file"]; f < ws {
-		ws -= f
+	if f := stat["inactive_file"]; f < current {
+		return current - f, f, true
 	}
-	return ws, true
+	return current, 0, true
 }
 
 // readMemoryStat 解析 cgroup v2 的 memory.stat（每行 "键 数值"，数值单位字节）。

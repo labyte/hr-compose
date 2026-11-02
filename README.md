@@ -141,7 +141,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | `restart [name...]` | 重启指定服务，不指定则全部；与 `start` 同样在收尾复核进程是否真的起来了，未起来的逐条报原因并以非 0 退出 | `sudo hr-compose restart api web` |
 | `enable [name...]` | 设置服务开机启动（仅 enable，不启停），不指定则全部 | `sudo hr-compose enable api` |
 | `disable [name...]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
-| `ps` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / PID / MEMORY 用量与上限 / UPTIME 运行时长 / DESCRIPTION 描述列），内存按 working set 计算并转友好单位，终端下状态彩色显示 | `hr-compose ps` |
+| `ps` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / PID / MEMORY 用量与上限 / UPTIME 运行时长 / DESCRIPTION 描述列），内存按 working set 计算并转友好单位（扣掉的可回收页缓存另以 `(+缓存)` 标出），终端下状态彩色显示 | `hr-compose ps` |
 | `logs [name...] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发（多个服务逐个查看） | `hr-compose logs api -f` |
 | `config [name...] [--real]` | 校验 yml 并打印 service 内容：默认打印生成的 unit 预览（段头标注"预览"与完整 unit 文件路径）；`--real` 读取磁盘上实际的 unit 文件（段头标注"实际文件"，文件不存在时给出提示，可用于对比预览与实际差异） | `hr-compose config api --real` |
 
@@ -158,10 +158,10 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | **STATUS** | `ActiveState` + `SubState` + `LoadState` | 合并为单列人话状态：`not-found` 未安装（unit 文件不存在，含 `down` 后）/ `running` 运行中 / `exited` 已完成（oneshot 退出后保持）/ `waiting` 等待中（notify 未就绪）/ `stopped` 已停止（已安装但停止）/ `starting` 启动中 / `restarting` 自动重启中 / `stopping` 停止中 / `reloading` 重载中 / `failed` 失败；罕见组合回退为 `主/子` 两级展示 |
 | **ENABLED** | `UnitFileState` | 是否开机启动：`enabled` 已启用 / `disabled` 未启用 / `static` 等 |
 | **PID** | `MainPID` | 主进程 PID；未运行（systemd 报 0）时显示 `-` |
-| **MEMORY** | cgroup `memory.current` − `memory.stat` 的 `inactive_file` | 按 Kubernetes working set 同口径计算：扣掉内核可随时回收的页缓存，所以服务读写大文件不会被算成"内存占用"，数值也不会随内核回收动作来回抖动。配了 `memory_max` 时追加 ` / 上限`，用量（含页缓存的 `memory.current` 与上限之比，即 systemd 判超限的口径）达 80% 标 `! 用量偏高`、90% 标 `!! 接近上限` 并着色 |
+| **MEMORY** | cgroup `memory.current` − `memory.stat` 的 `inactive_file` | 按 Kubernetes working set 同口径计算：扣掉内核可随时回收的页缓存，所以服务读写大文件不会被算成"内存占用"，数值也不会随内核回收动作来回抖动。扣掉的那部分另以 `(+缓存)` 标出（如 `9.1M (+286.1M 缓存)`），两者相加就是 `memory.current`，也就是 systemd 判超限/OOM 用的数——不标出来就会出现"用量只有 9.1M 却提示接近上限"这种看不懂的组合；缓存为 0 时不显示该段。配了 `memory_max` 时再追加 ` / 上限`，用量（含页缓存的 `memory.current` 与上限之比）达 80% 标 `! 用量偏高`、90% 标 `!! 接近上限` 并着色 |
 | **UPTIME** | `ExecMainStartTimestampMonotonic` | 主进程已运行时长（`45s` / `5m` / `2h` / `3d`）；服务重启后从头累计，可据此判断是否重启过；停止/失败/未启动的服务显示 `-` |
 
-MEMORY 读不到 cgroup 原生接口时（cgroup v1、混合层级或无权限）自动回退 systemd 的 `MemoryCurrent`；unit 未安装、未启用内存统计（systemd 报 `[not set]` 或 2^64 哨兵值）时统一显示 `-`，不会把 systemd 的内部字面量透出来。
+MEMORY 读不到 cgroup 原生接口时（cgroup v1、混合层级或无权限）自动回退 systemd 的 `MemoryCurrent`——此时拆不出缓存，只展示单值、不带 `(+缓存)` 段；unit 未安装、未启用内存统计（systemd 报 `[not set]` 或 2^64 哨兵值）时统一显示 `-`，不会把 systemd 的内部字面量透出来。
 
 unit 实际文件路径不在此展示，用 `hr-compose config` 预览时会在段头标注完整路径（如 `/etc/systemd/system/<name>-<service>.service`）；`config --real` 直接展示磁盘上已安装的 unit 文件内容，可与预览对比差异。
 

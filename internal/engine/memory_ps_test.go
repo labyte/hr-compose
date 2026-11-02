@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jedib0t/go-pretty/v6/text"
+
 	"hr.compose/internal/config"
 )
 
@@ -31,26 +33,32 @@ func fakeCgroup(t *testing.T, unitName, stat string) func() {
 
 const mb = uint64(1 << 20)
 
-func TestWorkingSetBytes(t *testing.T) {
+func TestWorkingSetSplit(t *testing.T) {
 	cases := []struct {
-		name    string
-		current uint64
-		stat    map[string]uint64
-		want    uint64
-		wantOK  bool
+		name      string
+		current   uint64
+		stat      map[string]uint64
+		want      uint64 // working set（主数）
+		wantCache uint64 // 被扣掉的可回收页缓存（单独展示）
+		wantOK    bool
 	}{
 		// 真机实测的 writer 服务：写 300M 磁盘文件后 memory.current 309.5M，其中 300M 是可回收页缓存
-		{"剔除可回收页缓存", 309500000, map[string]uint64{"inactive_file": 300000000}, 9500000, true},
+		{"剔除可回收页缓存", 309500000, map[string]uint64{"inactive_file": 300000000}, 9500000, 300000000, true},
 		// child 服务：64M 内存在子进程里，缓存为零 → working set 就是总量
-		{"无缓存时等于总量", 70500000, map[string]uint64{"anon": 68200000, "inactive_file": 0}, 70500000, true},
+		{"无缓存时等于总量", 70500000, map[string]uint64{"anon": 68200000, "inactive_file": 0}, 70500000, 0, true},
 		// inactive_file 理论上不会大于 current，异常数据时夹紧而不是减成回绕的巨值
-		{"缓存异常大于总量时夹紧", 10 * mb, map[string]uint64{"inactive_file": 20 * mb}, 10 * mb, true},
-		{"stat 缺失不回退到 working set", 10 * mb, nil, 0, false},
+		{"缓存异常大于总量时夹紧", 10 * mb, map[string]uint64{"inactive_file": 20 * mb}, 10 * mb, 0, true},
+		{"stat 缺失不回退到 working set", 10 * mb, nil, 0, 0, false},
 	}
 	for _, tc := range cases {
-		got, ok := workingSetBytes(tc.current, tc.stat)
-		if ok != tc.wantOK || got != tc.want {
-			t.Errorf("%s: workingSetBytes = %d/%v, want %d/%v", tc.name, got, ok, tc.want, tc.wantOK)
+		got, cache, ok := workingSetSplit(tc.current, tc.stat)
+		if ok != tc.wantOK || got != tc.want || cache != tc.wantCache {
+			t.Errorf("%s: workingSetSplit = %d/%d/%v, want %d/%d/%v",
+				tc.name, got, cache, ok, tc.want, tc.wantCache, tc.wantOK)
+		}
+		// 主数 + 缓存 恒等于 memory.current（systemd 判超限/OOM 用的口径），两者可对账
+		if ok && got+cache != tc.current {
+			t.Errorf("%s: working set %d + 缓存 %d ≠ current %d", tc.name, got, cache, tc.current)
 		}
 	}
 }
@@ -70,15 +78,37 @@ func TestReadMemoryStat(t *testing.T) {
 }
 
 func TestMemoryCellUsesWorkingSet(t *testing.T) {
-	// 现口径（MemoryCurrent）把 300M 可回收页缓存算进"内存占用"，working set 剔掉它
+	// 现口径（MemoryCurrent）把 300M 可回收页缓存算进"内存占用"，working set 剔掉它，
+	// 剔掉的部分单独标出来：主数 + 缓存 = memory.current，用户能自己对上 systemd 的判定口径。
 	defer fakeCgroup(t, "api.service", "anon 12582912\ninactive_file 300000000\n")()
 	fields := map[string]string{"MemoryCurrent": "309500000"}
 	got := memoryCell("api.service", &config.Service{}, fields, false)
-	if got != "9.1M" {
-		t.Errorf("MEMORY = %q, want working set 9.1M（309500000-300000000）", got)
+	if got != "9.1M (+286.1M 缓存)" {
+		t.Errorf("MEMORY = %q, want \"9.1M (+286.1M 缓存)\"（309500000-300000000）", got)
 	}
 	if strings.Contains(got, "295") {
 		t.Errorf("不应再直接展示含页缓存的 MemoryCurrent: %q", got)
+	}
+}
+
+func TestMemoryCellNoCacheSuffix(t *testing.T) {
+	fields := map[string]string{"MemoryCurrent": "309500000"}
+	cases := []struct {
+		name string
+		stat string
+	}{
+		// 缓存为零（进程内存全在匿名页里）时不加 "(+0B 缓存)" 这种噪声
+		{"缓存为零", "anon 309500000\ninactive_file 0\n"},
+		// 内核未导出 inactive_file 行时按 0 处理，同样不编造缓存段
+		{"stat 无 inactive_file 行", "anon 309500000\nslab 1024\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer fakeCgroup(t, "api.service", tc.stat)()
+			if got := memoryCell("api.service", &config.Service{}, fields, false); got != "295.2M" {
+				t.Errorf("MEMORY = %q, want \"295.2M\"（无缓存段）", got)
+			}
+		})
 	}
 }
 
@@ -134,6 +164,27 @@ func TestMemoryCellShowsLimitAndWarns(t *testing.T) {
 	got = memoryCell("api.service", inf, fields, false)
 	if !strings.HasSuffix(got, " / infinity") {
 		t.Errorf("无法解析的上限应原样展示，got %q", got)
+	}
+}
+
+func TestMemoryCellCacheWithLimitAndWarn(t *testing.T) {
+	// 配了 memory_max 且有可回收缓存时，三段拼装顺序固定：主数 (+缓存) / 上限 警示标记。
+	// 占用比仍按含缓存的 current 算（systemd 判超限的口径），所以会出现
+	// "主数只有 9.1M 却标 !! 接近上限"——缓存段正是为了解释这件事而存在。
+	defer fakeCgroup(t, "api.service", "anon 9500000\ninactive_file 300000000\n")()
+	fields := map[string]string{"MemoryCurrent": "309500000"}
+	svc := &config.Service{MemoryMax: "320M"}
+
+	got := memoryCell("api.service", svc, fields, false)
+	want := "9.1M (+286.1M 缓存) / 320.0M !! 接近上限"
+	if got != want {
+		t.Errorf("MEMORY = %q, want %q", got, want)
+	}
+	// 着色时整格上色（含缓存段），不得把 ANSI 码插在中间导致列宽错位；
+	// 期望值同样经 Colors.Sprint 生成，不假设当前环境真的输出 ANSI（CI 容器里可能不输出）
+	wantColored := text.Colors{text.FgRed}.Sprint(want)
+	if colored := memoryCell("api.service", svc, fields, true); colored != wantColored {
+		t.Errorf("着色输出应整格包裹，got %q want %q", colored, wantColored)
 	}
 }
 
