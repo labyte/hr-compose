@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -139,6 +140,7 @@ func (e *Engine) renderPs(names []string, all map[string]map[string]string) erro
 	// 开机时长只读一次，供全部服务的 UPTIME 列复用
 	boot, bootErr := readUptime()
 	on := colorsOn()
+	syncTextColors(on)
 
 	// 先攒出全部行再画表：描述列宽度要按终端列宽与前 6 列实际内容算，得先知道行内容
 	rows := make([][]string, 0, len(names))
@@ -174,7 +176,6 @@ func (e *Engine) renderPs(names []string, all map[string]map[string]string) erro
 	}
 
 	t := table.NewWriter()
-	t.SetOutputMirror(stdout)
 	t.AppendHeader(toRow(psHeaders))
 	t.SetColumnConfigs([]table.ColumnConfig{
 		// 描述列超长时截断而不是换行：默认的 text.WrapText 会把长描述折成两三行，
@@ -186,8 +187,13 @@ func (e *Engine) renderPs(names []string, all map[string]map[string]string) erro
 	for _, r := range rows {
 		t.AppendRow(toRow(r))
 	}
+	// 先渲染到缓冲区再写 stdout：边框字符要统一着暗灰色（dimBorders），
+	// go-pretty 直接 mirror 到 stdout 就拿不到渲染结果了
+	buf := &bytes.Buffer{}
+	t.SetOutputMirror(buf)
 	t.Render()
-	return nil
+	_, err := fmt.Fprint(stdout, dimBorders(buf.String(), on))
+	return err
 }
 
 // toRow 把字符串切片转成 go-pretty 的 Row（[]interface{}）。

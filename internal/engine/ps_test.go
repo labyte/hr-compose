@@ -381,3 +381,30 @@ func TestPsTableFitsTerminalWidth(t *testing.T) {
 		t.Errorf("描述列应被截断以适配终端宽度:\n%s", out)
 	}
 }
+
+// 边框着色为暗灰（视觉上更细更暗）只应作用于边框字符：状态列配色保持、数据单元格不染色，
+// 颜色关闭（管道/重定向/NO_COLOR）时不塞任何转义码。
+func TestPsBordersDimmed(t *testing.T) {
+	oldOverride := colorOverride
+	colorOverride = "always"
+	defer func() { colorOverride = oldOverride }()
+
+	out := runPs(t, map[string]*config.Service{"api": {Command: "/x/api"}})
+	if dim := borderColors.Sprint("│"); !strings.Contains(out, dim) {
+		t.Errorf("颜色开启时边框字符应为暗灰 %q:\n%s", dim, out)
+	}
+	// 状态列自己的配色不受边框着色影响
+	if green := (text.Colors{text.FgGreen}).Sprint("running"); !strings.Contains(out, green) {
+		t.Errorf("状态列 running 的绿色应保留:\n%s", out)
+	}
+	// 数据单元格里的普通字符不得被误染成边框色
+	if strings.Contains(out, borderColors.Sprint("a")) {
+		t.Errorf("数据单元格不应被染成边框色:\n%s", out)
+	}
+
+	colorOverride = "never"
+	out = runPs(t, map[string]*config.Service{"api": {Command: "/x/api"}})
+	if strings.Contains(out, "\x1b[") {
+		t.Errorf("颜色关闭时输出不应含 ANSI 转义码:\n%q", out)
+	}
+}

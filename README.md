@@ -146,7 +146,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | `restart [name...]` | 重启指定服务，不指定则全部；与 `start` 同样在收尾复核进程是否真的起来了，未起来的逐条报原因并以非 0 退出 | `sudo hr-compose restart api web` |
 | `enable [name...]` | 设置服务开机启动（仅 enable，不启停），不指定则全部 | `sudo hr-compose enable api` |
 | `disable [name...]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
-| `ps` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / PID / MEMORY 用量与上限 / UPTIME 运行时长 / DESCRIPTION 描述列），内存按 working set 计算并转友好单位（扣掉的可回收页缓存另以 `(+缓存)` 标出），终端下状态彩色显示 | `hr-compose ps` |
+| `ps` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / PID / MEMORY 用量与上限 / UPTIME 运行时长 / DESCRIPTION 描述列），内存按 working set 计算并转友好单位（扣掉的可回收页缓存另以 `(+缓存)` 标出），终端下状态彩色显示、边框着暗灰（线条视觉上更细更暗，突出数据） | `hr-compose ps` |
 | `logs [name...] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发（多个服务逐个查看） | `hr-compose logs api -f` |
 | `config [name...] [--real]` | 校验 yml 并打印 service 内容：默认打印生成的 unit 预览（段头标注"预览"与完整 unit 文件路径）；`--real` 读取磁盘上实际的 unit 文件（段头标注"实际文件"，文件不存在时给出提示，可用于对比预览与实际差异） | `hr-compose config api --real` |
 

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"os"
+	"strings"
 
 	"github.com/jedib0t/go-pretty/v6/text"
 )
@@ -43,4 +44,51 @@ func stateColors(active string) text.Colors {
 		return text.Colors{text.FgHiBlack}
 	}
 	return nil
+}
+
+// borderChars 是表格边框字符集（go-pretty StyleLight 用到的全部制表符）。
+const borderChars = "─│┌┐└┘├┤┬┴┼"
+
+// syncTextColors 把 colorsOn 的判断同步给 go-pretty 的 text 包：text 包在 init 时按环境
+// （TERM=dumb、NO_COLOR 等）全局决定颜色开关，测试沙箱/CI 里会把 Colors.Sprint 变成 no-op，
+// 使 colorOverride=always 名不副实、断言落空。渲染前同步一次，颜色开关就以我们自己的判断为准。
+func syncTextColors(on bool) {
+	if on {
+		text.EnableColors()
+	} else {
+		text.DisableColors()
+	}
+}
+
+// borderColors 是边框颜色：暗灰（亮黑）。终端里制表符的笔画粗细由字体决定、代码改不了，
+// 让线条"更细更暗"只能降颜色亮度——暗灰线条视觉上比亮白细一圈、也退到背景里，
+// 数据单元格因此更突出；与 stateColors 里 inactive 的暗灰同一档，整表色调统一。
+var borderColors = text.Colors{text.FgHiBlack}
+
+// dimBorders 把渲染结果 s 里的边框字符（连续成段地）包上 borderColors，数据单元格原样不动。
+// on=false（管道/重定向/NO_COLOR）时原样返回，不给非终端输出塞转义码。
+func dimBorders(s string, on bool) string {
+	if !on || s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + len("\x1b[90m\x1b[0m"))
+	runStart := -1 // 当前边框字符段的起始字节下标，-1 表示不在段内
+	for i, r := range s {
+		if strings.ContainsRune(borderChars, r) {
+			if runStart < 0 {
+				runStart = i
+			}
+			continue
+		}
+		if runStart >= 0 {
+			b.WriteString(borderColors.Sprint(s[runStart:i]))
+			runStart = -1
+		}
+		b.WriteRune(r)
+	}
+	if runStart >= 0 {
+		b.WriteString(borderColors.Sprint(s[runStart:]))
+	}
+	return b.String()
 }
