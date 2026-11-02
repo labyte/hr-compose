@@ -21,6 +21,7 @@ hr-compose 是一个对标简化版 docker-compose 的 Go CLI：读取 `hr-compo
 
 ```bash
 make build        # 构建到 bin/hr-compose（version 经 ldflags -X main.version 注入）
+make install      # 拷 bin/hr-compose 到 $(PREFIX)/bin（默认 /usr/local/bin）；只拷贝不重建，故先 build 再 sudo make install
 make test         # go test ./...
 make test-race    # go test -race ./...（CI 用这个）
 make vet          # go vet ./...
@@ -70,6 +71,7 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 ## 易错点
 
 - **`-f` 简写归 `logs` 的 `--follow` 专用**：root 的 `--file` 有意不设简写，否则 cobra 合并子命令标志集时因重复 `-f` panic。回归测试 `TestLogsFlagShorthandNoConflict` 保护，新增全局/子命令标志时勿用 `-f` 简写。
+- **`sudo hr-compose` 报 command not found**：sudo 按 `/etc/sudoers` 的 `secure_path` 重置 PATH（Ubuntu 默认只有 `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin`），`$GOPATH/bin`、`$HOME/.local/bin` 都不在其中——装到那里只有普通 shell 能用，而 `up`/`down`/`start`/`stop`/`restart` 恰恰必须提权。故 `make install` 默认 `PREFIX=/usr/local`（可 `PREFIX=$HOME/.local` 装用户目录、`DESTDIR=` 做打包暂存），且**刻意不依赖 `build`**：sudo 下找不到 `go`，而以 root 跑 `go build` 会往用户 module cache 写 root 属主文件、害后续非 root 构建报权限错。正确顺序 `make build && sudo make install`；缺产物时 install 直接报"未找到 bin/hr-compose，请先执行 make build"而不是甩一堆 make 错。同一台机器别留多份（`~/go/bin` + `~/.local/bin` + `/usr/local/bin`），PATH 顺序会让旧版遮住新版，排查用 `which -a hr-compose` 逐个 `--version`。
 - **`std_output` 默认丢弃输出**：未配置时 `EffectiveStdOutput()` 返回 `"null"`（生成 `StandardOutput=null`），日志由业务程序自行管理；要进 journald 需显式 `std_output: journal`。丢弃输出直接裸写 `std_output: null`（YAML null 字面量 → 字段为空 → 走空值默认 null，无需加引号）；`none` 为兼容旧写法，同样归一为 null。
 - **`user` 省略时以执行 `up` 的用户运行**：`EffectiveUser()` 取 `SUDO_USER`（sudo 下）或当前用户。注意可复现性：同一 yml 被多人/CI 各自 `up` 会生成不同 `User=`（内容 hash 变 → 重写重启），共享编排建议显式 `user`。
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize。

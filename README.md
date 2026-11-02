@@ -38,8 +38,13 @@ HR_COMPOSE_INSTALL_DIR=$HOME/.local/bin curl -fsSL https://github.com/labyte/hr-
 
 ```bash
 make build        # 产物在 bin/hr-compose
+sudo make install # 装到 /usr/local/bin（默认 PREFIX=/usr/local），装完打印版本号
 make cross        # 交叉编译 linux/amd64 + linux/arm64 + darwin/arm64
 ```
+
+> 顺序固定为**先 `make build`、再 `sudo make install`**：`install` 只拷贝不重新编译，因为 sudo 会按 `secure_path` 重置 PATH（通常找不到 `go`），而以 root 编译还会往你的 module cache 里写 root 属主文件，害后续非 root 构建报权限错。未先构建时 `make install` 会直接报"未找到 bin/hr-compose"。
+
+> 想被 `sudo hr-compose up` 找到，就**必须装在 `/usr/local/bin` 这类系统目录**：sudo 的 `secure_path` 不含 `$GOPATH/bin` 和 `$HOME/.local/bin`，装在那里只有普通 shell 能用。装到用户目录（免 sudo，代价是 sudo 下不可用）：`make install PREFIX=$HOME/.local`；打包用的暂存目录可叠加 `DESTDIR`。
 
 ### 离线安装（下载发行包）
 
