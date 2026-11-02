@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"hr.compose/internal/config"
 )
@@ -12,7 +14,8 @@ import (
 // Logs 按服务 std_output 分发查看命令，names 为空（nil/空切片）则全部：
 //   - journal            → 执行 journalctl（-u <unitName>，unit 名带 project 前缀）
 //   - file:<p>/append:<p> → 执行 tail 查看对应日志文件
-//   - null               → 提示用 tail 查看业务日志
+//   - null               → 配了 log_file 就直接 tail 业务日志（支持 glob，按最新 mtime 解析到
+//     当天在写的文件）；未配 log_file 才提示用 tail 自行查看
 func (e *Engine) Logs(names []string, follow bool) error {
 	targets, err := e.resolve(names...)
 	if err != nil {
@@ -35,12 +38,19 @@ func dispatchLogs(name, unitName string, svc *config.Service, follow bool) error
 		}
 		return runInteractive("journalctl", args...)
 	case out == "null":
-		if svc.LogFile != "" {
-			fmt.Printf("服务 %s 日志由业务程序写入 %s，请使用：tail -f %s\n", name, svc.LogFile, svc.LogFile)
-		} else {
-			fmt.Printf("服务 %s 未托管日志（std_output=null），请用 tail 查看业务日志文件\n", name)
+		if svc.LogFile == "" {
+			fmt.Fprintf(stdout, "服务 %s 未托管日志（std_output=null），请用 tail 查看业务日志文件\n", name)
+			return nil
 		}
-		return nil
+		// 业务库（NLog 一类）按日期切文件，log_file 配 glob 即可：查看时解析到 mtime 最新的那个
+		// （即当天在写的文件），配置不随日期改；解析不到给提示而不是报错
+		path, ok := resolveLogFile(svc.LogFile)
+		if !ok {
+			fmt.Fprintf(stdout, "服务 %s 的业务日志 %s 暂无匹配文件（服务可能尚未写入），请稍后重试\n", name, svc.LogFile)
+			return nil
+		}
+		fmt.Fprintf(stdout, "服务 %s 业务日志文件: %s\n", name, path)
+		return runLogFile(name, path, follow)
 	case strings.HasPrefix(out, "file:"):
 		return runLogFile(name, strings.TrimPrefix(out, "file:"), follow)
 	case strings.HasPrefix(out, "append:"):
@@ -50,10 +60,40 @@ func dispatchLogs(name, unitName string, svc *config.Service, follow bool) error
 	}
 }
 
-// runLogFile 对 file:/append: 模式执行 tail 查看日志文件；文件暂不存在时给提示。
+// resolveLogFile 把 log_file 解析为具体文件：不含 glob 通配符的取值原样返回（存在性由调用方 Stat）；
+// 含通配符的经 filepath.Glob 展开后取 mtime 最新者——NLog 这类业务库按日期切文件，
+// mtime 最新的就是当天在写的那个，配置因此不必随日期修改。glob 无匹配（或只匹配到目录）时 ok=false。
+func resolveLogFile(pattern string) (string, bool) {
+	if !strings.ContainsAny(pattern, "*?[") {
+		return pattern, true
+	}
+	matches, err := filepath.Glob(pattern)
+	if err != nil || len(matches) == 0 {
+		return "", false
+	}
+	var (
+		latest    string
+		latestMod time.Time
+		found     bool
+	)
+	for _, m := range matches {
+		fi, err := os.Stat(m)
+		if err != nil || fi.IsDir() {
+			continue
+		}
+		// mtime 更新者胜；mtime 相同（秒级粒度文件系统、同一瞬间创建）时保留 glob 排序靠后者——
+		// glob 按文件名升序，ISO 日期文件名的字典序即时间序，平局落到日期新者
+		if !found || !fi.ModTime().Before(latestMod) {
+			latest, latestMod, found = m, fi.ModTime(), true
+		}
+	}
+	return latest, found
+}
+
+// runLogFile 对 file:/append: 模式与 null+log_file 执行 tail 查看日志文件；文件暂不存在时给提示。
 func runLogFile(name, path string, follow bool) error {
 	if _, err := os.Stat(path); err != nil {
-		fmt.Printf("服务 %s 日志文件 %s 暂不存在（服务可能尚未写入），请稍后重试：tail -f %s\n", name, path, path)
+		fmt.Fprintf(stdout, "服务 %s 日志文件 %s 暂不存在（服务可能尚未写入），请稍后重试：tail -f %s\n", name, path, path)
 		return nil
 	}
 	args := []string{"-n", "100", path}

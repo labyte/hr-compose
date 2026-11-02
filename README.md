@@ -147,7 +147,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | `enable [name...]` | 设置服务开机启动（仅 enable，不启停），不指定则全部 | `sudo hr-compose enable api` |
 | `disable [name...]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
 | `ps` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / PID / MEMORY 用量与上限 / UPTIME 运行时长 / DESCRIPTION 描述列），内存按 working set 计算并转友好单位（扣掉的可回收页缓存另以 `(+缓存)` 标出），终端下状态彩色显示、边框着暗灰（线条视觉上更细更暗，突出数据） | `hr-compose ps` |
-| `logs [name...] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发（多个服务逐个查看） | `hr-compose logs api -f` |
+| `logs [name...] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发（多个服务逐个查看）；`std_output=null` 且配了 `log_file` 时直接 tail 业务日志（`log_file` 支持 glob，解析到 mtime 最新的文件，适配 NLog 一类按日期切文件的业务库） | `hr-compose logs api -f` |
 | `config [name...] [--real]` | 校验 yml 并打印 service 内容：默认打印生成的 unit 预览（段头标注"预览"与完整 unit 文件路径）；`--real` 读取磁盘上实际的 unit 文件（段头标注"实际文件"，文件不存在时给出提示，可用于对比预览与实际差异） | `hr-compose config api --real` |
 
 > 所有接受服务名的命令（`up`/`down`/`start`/`stop`/`restart`/`enable`/`disable`/`clean`/`logs`/`config`）都支持一次指定多个服务，如 `hr-compose restart api web`；不指定则作用于全部。`up` 指定服务会**自动带上其 `depends_on` 依赖**（docker-compose 风格，首次 `up web` 会连 `api` 一起安装启动）；`down` 指定服务**只清理指定的**，不连带依赖，需连带清理时显式列出。
@@ -236,7 +236,7 @@ services:
     user: appuser
     restart: always
     std_output: null                   # 丢弃 stdout/stderr（裸写 null 即可）
-    log_file: /var/log/redis/redis.log # 仅用于 logs 命令的 tail 提示
+    log_file: /var/log/redis/redis.log # std_output=null 时 logs 直接 tail 该文件（可 glob，取 mtime 最新者）
 ```
 
 需要"强依赖 + 启动延迟"时，在对应服务上加两个字段（以 `web` 强依赖 `api` 为例）：
@@ -270,7 +270,7 @@ services:
 | `memory_max` | 内存上限，大小带单位（2G / 500M / 1024K） | `MemoryMax` |
 | `cpu_quota` | CPU 配额，百分比（100% = 1 核，200% = 2 核） | `CPUQuota` |
 | `std_output` | 日志目标（null 默认 / none 兼容 / journal / file:`<path>` / append:`<path>`，file:/append: 的路径必须绝对路径） | `StandardOutput=`、`StandardError=` |
-| `log_file` | 外部日志文件路径（std_output 为 null 时 `logs` 提示用） | —（不参与 systemd 配置） |
+| `log_file` | `std_output` 为 null 时的业务日志路径：`logs` 直接 tail 该文件（支持 glob，如 `/var/log/app/*.log`，查看时取 mtime 最新者，即当天在写的文件）；须绝对路径 | —（不参与 systemd 配置） |
 | `depends_on` | 依赖的服务（仅 project 内引用）：默认软依赖，仅控制启动顺序、依赖失败不阻塞 | `After=` + `Wants=` |
 | `depends_on_required` | 把本服务 `depends_on` 改为强依赖：被依赖启动失败则本服务不启动，被依赖被停止/失败会联动停掉本服务（需配 `depends_on`，默认 false） | `After=` + `Requires=`（替代 `Wants=`） |
 | `start_delay` | 启动前延时秒数（默认 0 不延时）：先满足依赖启动顺序，依赖启动完成后再开始计时 | `ExecStartPre=/bin/sleep <n>` |

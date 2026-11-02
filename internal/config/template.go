@@ -25,7 +25,8 @@ func defaultTemplate(project string) string {
 #   memory_max    内存上限，大小带单位：2G / 500M / 1024K
 #   cpu_quota     CPU 配额，百分比：100% = 1 核 / 200% = 2 核
 #   std_output    null（默认，丢弃输出；裸写 null 即可）/ none（兼容旧写法）/ journal / file:<path> / append:<path>
-#   log_file      std_output 为 null 时的外部日志路径（仅 logs 提示用）
+#   log_file      std_output 为 null 时的业务日志路径：logs 命令直接 tail 该文件
+#                 （支持 glob，如 /var/log/app/*.log，查看时取 mtime 最新者，适配按日期切文件的业务库）
 #   depends_on    启动顺序依赖（软依赖 Wants=，仅控制顺序、依赖失败不阻塞）；
 #                  depends_on_required: true 时改为强依赖 Requires=（依赖启动失败则本服务不启动，
 #                  且依赖被停止/失败会联动停掉本服务）

@@ -38,8 +38,10 @@ type Service struct {
 	MemoryMax   string   `yaml:"memory_max"`
 	CPUQuota    string   `yaml:"cpu_quota"`
 	StdOutput   string   `yaml:"std_output"`
-	LogFile     string   `yaml:"log_file"`
-	DependsOn   []string `yaml:"depends_on"`
+	// LogFile 是 std_output 为 null 时的业务日志路径：logs 命令直接 tail 该文件
+	// （支持 glob，查看时解析到 mtime 最新者，适配 NLog 一类按日期切文件的业务库），不参与 systemd 配置。
+	LogFile   string   `yaml:"log_file"`
+	DependsOn []string `yaml:"depends_on"`
 	// DependsOnRequired 为 true 时 depends_on 由软依赖（Wants=）改为强依赖（Requires=）：
 	// 被依赖服务启动失败则本服务也不启动，且被依赖被停止/失败会联动停掉本服务。
 	DependsOnRequired bool `yaml:"depends_on_required"`
@@ -222,6 +224,11 @@ func (c *Config) Validate() error {
 		// 会截断/查看错文件；歧义在 Load 阶段消灭，up 同样受益
 		if p, ok := stdOutputPath(svc.StdOutput); ok && !strings.HasPrefix(p, "/") {
 			return fmt.Errorf("服务 %q 的 std_output %q 中 file:/append: 后必须是绝对路径：相对路径由 clean/logs 按当前目录解释，与 systemd 不一致", name, svc.StdOutput)
+		}
+		// log_file 只被 logs 命令消费（不经 systemd），但同样按执行时当前目录解释相对路径，
+		// 换个目录跑 logs 就会看错文件；glob 允许，目录部分仍须绝对
+		if svc.LogFile != "" && !strings.HasPrefix(svc.LogFile, "/") {
+			return fmt.Errorf("服务 %q 的 log_file 必须是绝对路径（可带 glob，如 /var/log/app/*.log）: %q", name, svc.LogFile)
 		}
 		for _, dep := range svc.DependsOn {
 			if _, ok := c.Services[dep]; !ok {

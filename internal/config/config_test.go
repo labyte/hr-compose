@@ -551,3 +551,15 @@ func TestLoadRejectsRelativeStdOutputPath(t *testing.T) {
 		}
 	}
 }
+
+// log_file 由 logs 命令按执行时当前目录解释相对路径，换目录跑 logs 会看错文件，Load 阶段拒绝。
+func TestLoadRejectsRelativeLogFile(t *testing.T) {
+	p := writeFixture(t, "name: testproj\nservices:\n  api:\n    command: /x/api\n    log_file: logs/api.log\n")
+	if _, err := Load(p); err == nil {
+		t.Errorf("log_file 相对路径应报错")
+	}
+	p = writeFixture(t, "name: testproj\nservices:\n  api:\n    command: /x/api\n    log_file: /var/log/app/*.log\n")
+	if _, err := Load(p); err != nil {
+		t.Errorf("log_file 绝对 glob 应合法, err=%v", err)
+	}
+}
