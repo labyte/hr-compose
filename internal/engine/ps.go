@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
@@ -74,6 +76,56 @@ func (e *Engine) fetchStates(names []string) (map[string]map[string]string, erro
 // descWidthMax 是 DESCRIPTION 列的最大显示宽度（中文/全角字符按 2 列计）。
 const descWidthMax = 40
 
+// descWidthMin 是终端极窄时描述列的下限：再窄整表必然超出终端宽度，只能交给终端折行。
+const descWidthMin = 12
+
+// psHeaders 是 ps 表头（7 列）。前 6 列宽度由表头与单元格内容决定，
+// 第 7 列 DESCRIPTION 吃终端剩下的宽度（见 descWidth）。
+var psHeaders = []string{"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME", "DESCRIPTION"}
+
+// termColumnsFunc 返回 stdout 终端的列宽，变量形式便于测试覆盖（真实实现见 detectTermColumns）。
+var termColumnsFunc = detectTermColumns
+
+// detectTermColumns 经 ioctl TIOCGWINSZ 查询 stdout 的终端列宽。
+// stdout 不是终端（管道/重定向/CI）时返回 0，表示不做自适应限宽、描述列保持 descWidthMax。
+func detectTermColumns() int {
+	type winsize struct{ rows, cols, xpix, ypix uint16 }
+	var ws winsize
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, os.Stdout.Fd(), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
+	if errno != 0 || ws.cols == 0 {
+		return 0
+	}
+	return int(ws.cols)
+}
+
+// descWidth 计算 DESCRIPTION 列可用的显示宽度：go-pretty 渲染后整表宽度 =
+// 竖线数（列数+1）+ Σ(每列宽度+2 个空格内边距)，前 6 列宽度由表头与行内容决定，
+// 终端剩余宽度全让给描述列，整表才不会被终端折行（折行会把边框拦腰截断）。
+// termCols<=0（非终端）或剩余宽度超过上限时取 descWidthMax；终端极窄时保底 descWidthMin。
+func descWidth(termCols int, rows [][]string) int {
+	if termCols <= 0 {
+		return descWidthMax
+	}
+	fixed := len(psHeaders) + 1 // 竖线
+	for i, h := range psHeaders[:len(psHeaders)-1] {
+		w := text.StringWidthWithoutEscSequences(h)
+		for _, r := range rows {
+			if cw := text.StringWidthWithoutEscSequences(r[i]); cw > w {
+				w = cw
+			}
+		}
+		fixed += w + 2
+	}
+	w := termCols - fixed - 2 // 描述列自身的 2 个空格内边距
+	switch {
+	case w > descWidthMax:
+		return descWidthMax
+	case w < descWidthMin:
+		return descWidthMin
+	}
+	return w
+}
+
 // snipToWidth 是描述列的限宽器：超过 maxWidth 列就截断并以 "..." 结尾，**不换行**。
 // 交给 go-pretty 的 text.Snip 做——它按显示宽度计（一个汉字算 2 列）且计宽时剥离 ANSI
 // 转义码，不会截出"半个汉字"的宽度导致右边框错位。
@@ -84,26 +136,19 @@ func snipToWidth(s string, maxWidth int) string {
 // renderPs 按给定状态数据渲染状态表（names 是展示顺序）。与 fetchStates 分开，
 // 便于 up 先查一次状态做启动复核、再用同一份数据画表，不重复调用 systemctl。
 func (e *Engine) renderPs(names []string, all map[string]map[string]string) error {
-	t := table.NewWriter()
-	t.SetOutputMirror(stdout)
-	t.AppendHeader(table.Row{"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME", "DESCRIPTION"})
-	t.SetColumnConfigs([]table.ColumnConfig{
-		// 描述列超长时截断而不是换行：默认的 text.WrapText 会把长描述折成两三行，
-		// 一个服务占多行，整表就散架、难以逐行扫读。完整描述见 hr-compose.yml 或 config 命令。
-		{Number: 7, WidthMax: descWidthMax, WidthMaxEnforcer: snipToWidth},
-	})
-	t.SetStyle(table.StyleLight)
-
 	// 开机时长只读一次，供全部服务的 UPTIME 列复用
 	boot, bootErr := readUptime()
 	on := colorsOn()
+
+	// 先攒出全部行再画表：描述列宽度要按终端列宽与前 6 列实际内容算，得先知道行内容
+	rows := make([][]string, 0, len(names))
 	for _, name := range names {
 		svc := e.cfg.Services[name]
 		fields, ok := all[e.unitName(name)]
 		if !ok {
 			// Show 完全失败（如 systemctl 不可用/无任何输出）时按空状态展示；
 			// 未安装的 unit 在正常 systemd 下能取到 LoadState=not-found，会走下方 not-found 分支
-			t.AppendRow(table.Row{name, "-", "-", "-", "-", "-", valueOrDash(svc.Description)})
+			rows = append(rows, []string{name, "-", "-", "-", "-", "-", valueOrDash(svc.Description)})
 			continue
 		}
 		var colors text.Colors
@@ -117,7 +162,7 @@ func (e *Engine) renderPs(names []string, all map[string]map[string]string) erro
 			}
 		}
 		// go-pretty 计算列宽时会剥离 ANSI 转义，可安全用 Sprint 生成的彩色字符串作为单元格
-		t.AppendRow(table.Row{
+		rows = append(rows, []string{
 			name,
 			colors.Sprint(mergedState(fields["ActiveState"], fields["SubState"], fields["LoadState"])),
 			valueOrDash(fields["UnitFileState"]),
@@ -127,8 +172,31 @@ func (e *Engine) renderPs(names []string, all map[string]map[string]string) erro
 			valueOrDash(svc.Description),
 		})
 	}
+
+	t := table.NewWriter()
+	t.SetOutputMirror(stdout)
+	t.AppendHeader(toRow(psHeaders))
+	t.SetColumnConfigs([]table.ColumnConfig{
+		// 描述列超长时截断而不是换行：默认的 text.WrapText 会把长描述折成两三行，
+		// 一个服务占多行，整表就散架、难以逐行扫读；宽度按终端自适应（descWidth），
+		// 窄终端下整表也不会超出终端被折行。完整描述见 hr-compose.yml 或 config 命令。
+		{Number: 7, WidthMax: descWidth(termColumnsFunc(), rows), WidthMaxEnforcer: snipToWidth},
+	})
+	t.SetStyle(table.StyleLight)
+	for _, r := range rows {
+		t.AppendRow(toRow(r))
+	}
 	t.Render()
 	return nil
+}
+
+// toRow 把字符串切片转成 go-pretty 的 Row（[]interface{}）。
+func toRow(cells []string) table.Row {
+	row := make(table.Row, len(cells))
+	for i, c := range cells {
+		row[i] = c
+	}
+	return row
 }
 
 // cgroupBase 是 cgroup 挂载根目录。变量形式便于测试覆盖（同 UnitDir 的模式）。

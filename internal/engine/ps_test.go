@@ -325,3 +325,59 @@ func TestPsDescriptionTruncatedNotWrapped(t *testing.T) {
 		t.Errorf("表头缺失:\n%s", out)
 	}
 }
+
+func TestDescWidth(t *testing.T) {
+	// 前 6 列显示宽度：NAME 4 / STATUS 7 / ENABLED 7 / PID 7 / MEMORY 18（"38.8M (+100K 缓存)"，
+	// 汉字按 2 列计）/ UPTIME 6，加 8 条竖线与每列 2 个空格内边距，固定部分共 69 列
+	wideRows := [][]string{{
+		"app1", "running", "enabled", "2369314", "38.8M (+100K 缓存)", "35m11s", "第 7 列不参与固定宽度计算",
+	}}
+	cases := []struct {
+		name     string
+		termCols int
+		rows     [][]string
+		want     int
+	}{
+		{"非终端保持上限", 0, wideRows, descWidthMax},
+		{"负列宽按非终端处理", -1, wideRows, descWidthMax},
+		{"宽终端触上限", 200, wideRows, descWidthMax},
+		{"92 列终端把剩余宽度给描述列", 92, wideRows, 21},
+		{"恰好容纳满宽描述列", 111, wideRows, descWidthMax},
+		{"极窄终端保下限", 40, wideRows, descWidthMin},
+		// 无行数据时按表头计固定宽度：4+6+7+3+6+6 加竖线与内边距共 52 列，80-52-2=26
+		{"无行数据按表头计宽", 80, nil, 26},
+	}
+	for _, tc := range cases {
+		if got := descWidth(tc.termCols, tc.rows); got != tc.want {
+			t.Errorf("%s: descWidth(%d) = %d, want %d", tc.name, tc.termCols, got, tc.want)
+		}
+	}
+}
+
+// 窄终端下描述列必须自动收窄，使整表宽度恰好等于终端列宽：超出终端宽度的表格会被终端
+// 拦腰折行（续行没有左边框），比折描述列难看得多。
+func TestPsTableFitsTerminalWidth(t *testing.T) {
+	oldTerm := termColumnsFunc
+	termColumnsFunc = func() int { return 80 }
+	defer func() { termColumnsFunc = oldTerm }()
+
+	longCJK := "反复读取磁盘上的大文件以制造可回收页缓存用于验证内存口径是否正常显示不出错"
+	out := runPs(t, map[string]*config.Service{
+		"api":    {Command: "/x/api", Description: longCJK},
+		"reader": {Command: "/x/read", Description: longCJK},
+	})
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	// 上边框 + 表头 + 表头分隔线 + 2 行数据 + 下边框 = 6 行；一旦折行，数据行会翻倍
+	if len(lines) != 6 {
+		t.Errorf("每个服务仍应只占一行（期望 6 行，实得 %d 行）:\n%s", len(lines), out)
+	}
+	// 整表每行显示宽度必须恰好等于终端列宽（go-pretty 会补齐内边距），既不被终端折行也不浪费宽度
+	for i, l := range lines {
+		if w := text.StringWidthWithoutEscSequences(l); w != 80 {
+			t.Errorf("第 %d 行显示宽度 %d ≠ 终端列宽 80:\n%s", i+1, w, out)
+		}
+	}
+	if !strings.Contains(out, "...") {
+		t.Errorf("描述列应被截断以适配终端宽度:\n%s", out)
+	}
+}
