@@ -142,7 +142,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | `start [name...]` | 启动已安装的服务（不重生成 unit），不指定则全部；需先 `up` 过。systemctl 返回 0 只代表任务受理，故收尾会复核进程是否真的起来了：复核通过才打印 OK，未起来的逐条报原因并以非 0 退出 | `sudo hr-compose start api web` |
 | `stop [name...]` | 停止服务（保留 unit 与 enable，不删除），不指定则全部 | `sudo hr-compose stop api` |
 | `down [name...]` | 停止并清理指定服务，删除 unit 文件；只清理指定的、不连带其依赖，目标含 journal 日志服务时清空系统 journal | `sudo hr-compose down web` |
-| `clean [name...]` | 清除服务日志（journal 清空 / file 截断），不指定则全部 | `sudo hr-compose clean api` |
+| `clean [name...]` | 清除服务日志（journal 清空 / file 截断），不指定则全部；清 journal 清的是**整个系统 journal**，交互环境提示确认、非交互（脚本/CI）须 `--yes`/`-y` 否则跳过；运行中服务的 `file:` 日志截断后警告重启一次（fd 偏移不随截断归零会留空孔） | `sudo hr-compose clean api` |
 | `restart [name...]` | 重启指定服务，不指定则全部；与 `start` 同样在收尾复核进程是否真的起来了，未起来的逐条报原因并以非 0 退出 | `sudo hr-compose restart api web` |
 | `enable [name...]` | 设置服务开机启动（仅 enable，不启停），不指定则全部 | `sudo hr-compose enable api` |
 | `disable [name...]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
@@ -227,7 +227,7 @@ services:
     stop_timeout: 30                   # TimeoutStopSec，优雅停止宽限期（秒）
     memory_max: 2G                     # MemoryMax，大小带单位：2G / 500M / 1024K
     cpu_quota: 200%                    # CPUQuota，百分比：100% = 1 核，200% = 2 核
-    std_output: journal                # StandardOutput/StandardError，取值：null（默认，裸写即可）/ none（兼容旧写法）/ journal / file:<path> / append:<path>
+    std_output: journal                # StandardOutput/StandardError，取值：null（默认，裸写即可）/ none（兼容旧写法）/ journal / file:<path> / append:<path>（file:/append: 必须绝对路径）
     depends_on:                        # 软依赖默认：After= + Wants=（仅控制顺序，依赖失败不阻塞）；要强依赖加 depends_on_required
       - redis
   redis:
@@ -269,7 +269,7 @@ services:
 | `stop_timeout` | 停止宽限期秒数（默认 90） | `TimeoutStopSec` |
 | `memory_max` | 内存上限，大小带单位（2G / 500M / 1024K） | `MemoryMax` |
 | `cpu_quota` | CPU 配额，百分比（100% = 1 核，200% = 2 核） | `CPUQuota` |
-| `std_output` | 日志目标（null 默认 / none 兼容 / journal / file:`<path>` / append:`<path>`） | `StandardOutput=`、`StandardError=` |
+| `std_output` | 日志目标（null 默认 / none 兼容 / journal / file:`<path>` / append:`<path>`，file:/append: 的路径必须绝对路径） | `StandardOutput=`、`StandardError=` |
 | `log_file` | 外部日志文件路径（std_output 为 null 时 `logs` 提示用） | —（不参与 systemd 配置） |
 | `depends_on` | 依赖的服务（仅 project 内引用）：默认软依赖，仅控制启动顺序、依赖失败不阻塞 | `After=` + `Wants=` |
 | `depends_on_required` | 把本服务 `depends_on` 改为强依赖：被依赖启动失败则本服务不启动，被依赖被停止/失败会联动停掉本服务（需配 `depends_on`，默认 false） | `After=` + `Requires=`（替代 `Wants=`） |
@@ -288,7 +288,7 @@ services:
 
 > `file:` / `append:` 的文件由 systemd 以 `User=` 身份打开，需保证目录对该用户可写；`file:` 会截断已有文件。
 >
-> **日志清理**：`down` 只对本次清理的目标服务判断 journal——目标含 journal 服务时才清空系统 journal（指定子集时不会因其他服务的 journal 而误清）；`clean [name...]` 可手动清除日志（journal 清空 / file 截断 / null 提示）。注意 journald 不支持按 unit 删除，清空的是**整个系统 journal**。
+> **日志清理**：`down` 只对本次清理的目标服务判断 journal——目标含 journal 服务时才清空系统 journal（指定子集时不会因其他服务的 journal 而误清）；`clean [name...]` 可手动清除日志（journal 清空 / file 截断 / null 提示）。注意 journald 不支持按 unit 删除，清空的是**整个系统 journal**——因此 `clean` 清 journal 前交互环境会提示确认（仅 `y`/`yes` 放行），非交互环境必须显式 `--yes`/`-y` 才执行、否则跳过并提示。`file:`/`append:` 后的路径必须绝对路径（相对路径由 clean/logs 按当前目录解释、与 systemd 不一致，校验直接报错）；截断运行中服务的 `file:` 日志会警告重启一次（systemd 的 `file:` 不开 O_APPEND，fd 写偏移不随截断归零，后续写入留 NUL 空孔），`append:` 无此问题。
 
 ---
 

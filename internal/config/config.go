@@ -97,6 +97,17 @@ func (s *Service) EffectiveStdOutput() string {
 	}
 }
 
+// stdOutputPath 提取 std_output 的 file:/append: 形式里的日志路径，ok=true 表示该取值带路径、
+// 需要校验（绝对路径）；journal/null 等不带路径的形式返回 ok=false。
+func stdOutputPath(v string) (string, bool) {
+	for _, prefix := range []string{"file:", "append:"} {
+		if strings.HasPrefix(v, prefix) {
+			return strings.TrimPrefix(v, prefix), true
+		}
+	}
+	return "", false
+}
+
 // userResolver 解析"执行 up 的真实用户"：SUDO_USER 优先（sudo 下进程是 root，取真实用户），
 // 否则取系统当前用户；均不可用时兜底 root（与 systemd 未设 User 的默认一致）。
 // 包级变量便于测试注入。
@@ -206,6 +217,11 @@ func (c *Config) Validate() error {
 		}
 		if err := ValidatePassthrough(name, svc); err != nil {
 			return err
+		}
+		// file:/append: 必须绝对路径：clean/logs 按当前目录解释相对路径，与 systemd 的解释不一致，
+		// 会截断/查看错文件；歧义在 Load 阶段消灭，up 同样受益
+		if p, ok := stdOutputPath(svc.StdOutput); ok && !strings.HasPrefix(p, "/") {
+			return fmt.Errorf("服务 %q 的 std_output %q 中 file:/append: 后必须是绝对路径：相对路径由 clean/logs 按当前目录解释，与 systemd 不一致", name, svc.StdOutput)
 		}
 		for _, dep := range svc.DependsOn {
 			if _, ok := c.Services[dep]; !ok {

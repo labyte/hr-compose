@@ -534,3 +534,20 @@ services:
 		t.Fatal(err)
 	}
 }
+
+// file:/append: 的相对路径在 clean/logs（按当前目录解释）与 systemd 之间解释不一致，
+// 会截断/查看错文件，Load 阶段直接拒绝；绝对路径与 journal/null 不受影响。
+func TestLoadRejectsRelativeStdOutputPath(t *testing.T) {
+	for _, v := range []string{"file:logs/api.log", "append:api.log", "file:", "append:"} {
+		p := writeFixture(t, "name: testproj\nservices:\n  api:\n    command: /x/api\n    std_output: "+v+"\n")
+		if _, err := Load(p); err == nil {
+			t.Errorf("std_output %q 相对路径应报错", v)
+		}
+	}
+	for _, v := range []string{"file:/var/log/api.log", "append:/var/log/api.log", "journal", "null", ""} {
+		p := writeFixture(t, "name: testproj\nservices:\n  api:\n    command: /x/api\n    std_output: "+v+"\n")
+		if _, err := Load(p); err != nil {
+			t.Errorf("std_output %q 应合法, err=%v", v, err)
+		}
+	}
+}
