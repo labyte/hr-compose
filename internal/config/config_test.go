@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -100,6 +101,84 @@ services:
 `)
 	if _, err := Load(p); err == nil {
 		t.Fatal("want error for undefined depends_on")
+	}
+}
+
+func TestRejectDependsOnSelf(t *testing.T) {
+	// 自依赖会在 unit 里生成 After=<自身>.service，systemd 报 ordering cycle 且删掉 start 作业，
+	// 应提前在 Load 阶段明确拒绝。
+	p := writeFixture(t, `
+name: testproj
+services:
+  api:
+    command: /opt/myapp/api
+    depends_on: [api]
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("want error for self depends_on")
+	}
+}
+
+func TestRejectDependsOnCycle(t *testing.T) {
+	// a <-> b 互相依赖：systemd 会静默删掉一个 start 作业，必须提前报错。
+	p := writeFixture(t, `
+name: testproj
+services:
+  a:
+    command: /bin/a
+    depends_on: [b]
+  b:
+    command: /bin/b
+    depends_on: [a]
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("want error for cyclic depends_on")
+	}
+}
+
+func TestDependsOnCycleErrorReportsPath(t *testing.T) {
+	// 报错信息应给出完整环路径，用户一眼就能看出要断哪条边。
+	p := writeFixture(t, `
+name: testproj
+services:
+  a:
+    command: /bin/a
+    depends_on: [c]
+  b:
+    command: /bin/b
+    depends_on: [a]
+  c:
+    command: /bin/c
+    depends_on: [b]
+`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if !strings.Contains(err.Error(), "a -> c -> b -> a") {
+		t.Errorf("error %q 应含环路径 a -> c -> b -> a", err)
+	}
+}
+
+func TestAcceptAcyclicDependsOn(t *testing.T) {
+	// 菱形依赖（无环）不应被误伤。
+	p := writeFixture(t, `
+name: testproj
+services:
+  a:
+    command: /bin/a
+  b:
+    command: /bin/b
+    depends_on: [a]
+  c:
+    command: /bin/c
+    depends_on: [a]
+  d:
+    command: /bin/d
+    depends_on: [b, c]
+`)
+	if _, err := Load(p); err != nil {
+		t.Fatalf("无环依赖应合法, err=%v", err)
 	}
 }
 

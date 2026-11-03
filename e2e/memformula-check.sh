@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 口径对比 + 页缓存归属实证（避免用 tmpfs：tmpfs 的页不可回收，不是"页缓存"）。
-#   A 现口径   MemoryCurrent = cgroup memory.current（anon + file + kernel + slab）
-#   B anon    memory.stat anon（不可回收，OOM 真正的驱动者）
-#   C workingset = memory.current − inactive_file（Kubernetes 的 working set 定义）
+#   A MemoryCurrent = cgroup memory.current（含页缓存）
+#   B anon    memory.stat anon（不可回收，hr-compose ps 现行口径）
+#   C current−file = memory.current − file（剔除全部文件页缓存，仅作对照）
 #   D 主进程 RSS   E 全任务 RSS 之和
 set -uo pipefail
 BIN="${1:-/usr/local/bin/hr-compose}"
@@ -81,8 +81,8 @@ for svc in writer reader child; do
   unev="$(val "$cg" unevictable)"; slab="$(val "$cg" slab)"
   echo
   echo "===== $svc（任务数=$tasks，MainPID=$pid）====="
-  printf '  A MemoryCurrent = %-9s  B anon = %-9s  C current−inactive_file = %s\n' \
-    "$(mb "$cur")" "$(mb "$anon")" "$(mb $(( ${cur:-0} - ${inact:-0} )) )"
+  printf '  A MemoryCurrent = %-9s  B anon = %-9s  C current−file = %s\n' \
+    "$(mb "$cur")" "$(mb "$anon")" "$(mb $(( ${cur:-0} - ${file:-0} )) )"
   printf '  D 主进程RSS = %-9s  E 全任务RSS和 = %-9s  主进程PSS = %s\n' "$(mb "$mainrss")" "$(mb "$sumrss")" "$(mb "$mainpss")"
   printf '  memory.stat 关键行：file=%s anon=%s inactive_file=%s unevictable=%s slab=%s\n' \
     "$(mb "$file")" "$(mb "$anon")" "$(mb "$inact")" "$(mb "$unev")" "$(mb "$slab")"

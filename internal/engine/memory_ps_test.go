@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jedib0t/go-pretty/v6/text"
-
 	"hr.compose/internal/config"
 )
 
@@ -33,43 +31,41 @@ func fakeCgroup(t *testing.T, unitName, stat string) func() {
 
 const mb = uint64(1 << 20)
 
-func TestWorkingSetSplit(t *testing.T) {
+func TestServiceMemory(t *testing.T) {
 	cases := []struct {
-		name      string
-		current   uint64
-		stat      map[string]uint64
-		want      uint64 // working set（主数）
-		wantCache uint64 // 被扣掉的可回收页缓存（单独展示）
-		wantOK    bool
+		name   string
+		stat   string // fakeCgroup 写入的 memory.stat 内容（"" 表示不写文件 → 读不到）
+		fields map[string]string
+		want   uint64
+		wantOK bool
 	}{
-		// 真机实测的 writer 服务：写 300M 磁盘文件后 memory.current 309.5M，其中 300M 是可回收页缓存
-		{"剔除可回收页缓存", 309500000, map[string]uint64{"inactive_file": 300000000}, 9500000, 300000000, true},
-		// child 服务：64M 内存在子进程里，缓存为零 → working set 就是总量
-		{"无缓存时等于总量", 70500000, map[string]uint64{"anon": 68200000, "inactive_file": 0}, 70500000, 0, true},
-		// inactive_file 理论上不会大于 current，异常数据时夹紧而不是减成回绕的巨值
-		{"缓存异常大于总量时夹紧", 10 * mb, map[string]uint64{"inactive_file": 20 * mb}, 10 * mb, 0, true},
-		{"stat 缺失不回退到 working set", 10 * mb, nil, 0, 0, false},
+		// 有 anon 行 → 用 anon（匿名内存）。MemoryCurrent 被页缓存撑大也不影响。
+		{"anon 优先", "anon 12582912\nfile 314572800\n", map[string]string{"MemoryCurrent": "309500000"}, 12582912, true},
+		// stat 无 anon 行 → 回退 MemoryCurrent
+		{"无 anon 行回退 current", "file 314572800\n", map[string]string{"MemoryCurrent": "309500000"}, 309500000, true},
+		// stat 读不到（文件不存在/无权限）→ 回退 MemoryCurrent
+		{"读不到 stat 回退 current", "", map[string]string{"MemoryCurrent": "309500000"}, 309500000, true},
+		// 哨兵值 → 不可用
+		{"哨兵值", "", map[string]string{"MemoryCurrent": "18446744073709551615"}, 0, false},
 	}
 	for _, tc := range cases {
-		got, cache, ok := workingSetSplit(tc.current, tc.stat)
-		if ok != tc.wantOK || got != tc.want || cache != tc.wantCache {
-			t.Errorf("%s: workingSetSplit = %d/%d/%v, want %d/%d/%v",
-				tc.name, got, cache, ok, tc.want, tc.wantCache, tc.wantOK)
-		}
-		// 主数 + 缓存 恒等于 memory.current（systemd 判超限/OOM 用的口径），两者可对账
-		if ok && got+cache != tc.current {
-			t.Errorf("%s: working set %d + 缓存 %d ≠ current %d", tc.name, got, cache, tc.current)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			defer fakeCgroup(t, "api.service", tc.stat)()
+			got, ok := serviceMemory("api.service", tc.fields)
+			if ok != tc.wantOK || got != tc.want {
+				t.Errorf("serviceMemory = %d/%v, want %d/%v", got, ok, tc.want, tc.wantOK)
+			}
+		})
 	}
 }
 
 func TestReadMemoryStat(t *testing.T) {
-	defer fakeCgroup(t, "api.service", "anon 12582912\nfile 314572800\ninactive_file 314572800\nslab_packed 0\n")()
+	defer fakeCgroup(t, "api.service", "anon 12582912\nfile 314572800\nslab_packed 0\n")()
 	stat, ok := readMemoryStat(filepath.Join(cgroupBase, "system.slice", "api.service", "memory.stat"))
 	if !ok {
 		t.Fatal("memory.stat 可读时应返回 ok")
 	}
-	if stat["inactive_file"] != 314572800 || stat["anon"] != 12582912 {
+	if stat["anon"] != 12582912 || stat["file"] != 314572800 {
 		t.Errorf("解析结果不符: %v", stat)
 	}
 	if _, ok := readMemoryStat(filepath.Join(cgroupBase, "system.slice", "missing.service", "memory.stat")); ok {
@@ -77,38 +73,17 @@ func TestReadMemoryStat(t *testing.T) {
 	}
 }
 
-func TestMemoryCellUsesWorkingSet(t *testing.T) {
-	// 现口径（MemoryCurrent）把 300M 可回收页缓存算进"内存占用"，working set 剔掉它，
-	// 剔掉的部分单独标出来：主数 + 缓存 = memory.current，用户能自己对上 systemd 的判定口径。
-	defer fakeCgroup(t, "api.service", "anon 12582912\ninactive_file 300000000\n")()
+func TestMemoryCellUsesAnon(t *testing.T) {
+	// 口径：展示匿名内存 anon（12.0 MiB），而不是被页缓存撑大的 MemoryCurrent（295.2 MiB）。
+	// 系统监视器对 app3 这类"只加载代码、不做业务文件 I/O"的服务显示的就是 anon。
+	defer fakeCgroup(t, "api.service", "anon 12582912\nfile 314572800\n")()
 	fields := map[string]string{"MemoryCurrent": "309500000"}
 	got := memoryCell("api.service", &config.Service{}, fields, false)
-	if got != "9.1M (+286.1M 缓存)" {
-		t.Errorf("MEMORY = %q, want \"9.1M (+286.1M 缓存)\"（309500000-300000000）", got)
+	if got != "12.0 MiB" {
+		t.Errorf("MEMORY = %q, want \"12.0 MiB\"（anon 12582912）", got)
 	}
-	if strings.Contains(got, "295") {
-		t.Errorf("不应再直接展示含页缓存的 MemoryCurrent: %q", got)
-	}
-}
-
-func TestMemoryCellNoCacheSuffix(t *testing.T) {
-	fields := map[string]string{"MemoryCurrent": "309500000"}
-	cases := []struct {
-		name string
-		stat string
-	}{
-		// 缓存为零（进程内存全在匿名页里）时不加 "(+0B 缓存)" 这种噪声
-		{"缓存为零", "anon 309500000\ninactive_file 0\n"},
-		// 内核未导出 inactive_file 行时按 0 处理，同样不编造缓存段
-		{"stat 无 inactive_file 行", "anon 309500000\nslab 1024\n"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			defer fakeCgroup(t, "api.service", tc.stat)()
-			if got := memoryCell("api.service", &config.Service{}, fields, false); got != "295.2M" {
-				t.Errorf("MEMORY = %q, want \"295.2M\"（无缓存段）", got)
-			}
-		})
+	if strings.Contains(got, "295") || strings.Contains(got, "缓存") {
+		t.Errorf("不应展示含页缓存的 MemoryCurrent 或缓存段: %q", got)
 	}
 }
 
@@ -116,8 +91,8 @@ func TestMemoryCellFallsBackWithoutCgroup(t *testing.T) {
 	// cgroup v1 / 混合层级 / 无权限读不到 memory.stat 时，回退 systemd 的 MemoryCurrent
 	defer fakeCgroup(t, "api.service", "")()
 	got := memoryCell("api.service", &config.Service{}, map[string]string{"MemoryCurrent": "309500000"}, false)
-	if got != "295.2M" {
-		t.Errorf("读不到 memory.stat 时应回退现口径，got %q want 295.2M", got)
+	if got != "295.2 MiB" {
+		t.Errorf("读不到 memory.stat 时应回退 MemoryCurrent，got %q want 295.2 MiB", got)
 	}
 	// 未启用内存统计的哨兵值仍显示 "-"
 	got = memoryCell("api.service", &config.Service{}, map[string]string{"MemoryCurrent": "18446744073709551615"}, false)
@@ -127,64 +102,54 @@ func TestMemoryCellFallsBackWithoutCgroup(t *testing.T) {
 }
 
 func TestMemoryCellShowsLimitAndWarns(t *testing.T) {
-	fields := map[string]string{"MemoryCurrent": "300000000"} // ≈286M
+	// 占用比按 anon 算（与展示口径一致），不再按含页缓存的 current 算。
+	fields := map[string]string{"MemoryCurrent": "309500000"}
 	svc := &config.Service{MemoryMax: "300M"}
 
-	// 用量 95%（含缓存的 current 与上限之比）→ 高亮警示
-	defer fakeCgroup(t, "api.service", "inactive_file 0\n")()
-	got := memoryCell("api.service", svc, fields, false)
-	if !strings.HasPrefix(got, "286.1M / 300.0M") {
-		t.Errorf("应显示 working set / 上限，got %q", got)
-	}
-	if !strings.Contains(got, "!!") {
-		t.Errorf("逼近上限应有 !! 标记，got %q", got)
-	}
+	// 匿名内存 300M（314572800 字节）/ 300M = 100% → 红色 !!
+	t.Run("100%", func(t *testing.T) {
+		defer fakeCgroup(t, "api.service", "anon 314572800\n")()
+		got := memoryCell("api.service", svc, fields, false)
+		if !strings.HasPrefix(got, "300.0 MiB / 300.0 MiB") {
+			t.Errorf("应显示 anon / 上限，got %q", got)
+		}
+		if !strings.Contains(got, "!!") {
+			t.Errorf("逼近上限应有 !! 标记，got %q", got)
+		}
+	})
 
 	// 80%~90% 用单感叹号（260000000 / 314572800 ≈ 82.6%）
-	mid := map[string]string{"MemoryCurrent": "260000000"}
-	got = memoryCell("api.service", svc, mid, false)
-	if !strings.Contains(got, " ! ") || strings.Contains(got, "!!") {
-		t.Errorf("80%%~90%% 应是单感叹号，got %q", got)
-	}
-	// 恰好 80% 也警示（含缓存的 current 就是判定口径）
-	got = memoryCell("api.service", svc, map[string]string{"MemoryCurrent": "251658240"}, false) // 240M/300M
-	if !strings.Contains(got, " ! ") {
-		t.Errorf("80%% 应警示，got %q", got)
-	}
-
-	// 低于 80% 不加噪声
-	low := map[string]string{"MemoryCurrent": "100000000"}
-	got = memoryCell("api.service", svc, low, false)
-	if strings.Contains(got, "!") {
-		t.Errorf("用量正常时不该有警示标记，got %q", got)
-	}
+	t.Run("82.6%", func(t *testing.T) {
+		defer fakeCgroup(t, "api.service", "anon 260000000\n")()
+		got := memoryCell("api.service", svc, fields, false)
+		if !strings.Contains(got, " ! ") || strings.Contains(got, "!!") {
+			t.Errorf("80%%~90%% 应是单感叹号，got %q", got)
+		}
+	})
 
 	// 认不出的上限取值原样展示（如 infinity）
-	inf := &config.Service{MemoryMax: "infinity"}
-	got = memoryCell("api.service", inf, fields, false)
-	if !strings.HasSuffix(got, " / infinity") {
-		t.Errorf("无法解析的上限应原样展示，got %q", got)
-	}
+	t.Run("infinity", func(t *testing.T) {
+		defer fakeCgroup(t, "api.service", "anon 314572800\n")()
+		got := memoryCell("api.service", &config.Service{MemoryMax: "infinity"}, fields, false)
+		if !strings.HasSuffix(got, " / infinity") {
+			t.Errorf("无法解析的上限应原样展示，got %q", got)
+		}
+	})
 }
 
-func TestMemoryCellCacheWithLimitAndWarn(t *testing.T) {
-	// 配了 memory_max 且有可回收缓存时，三段拼装顺序固定：主数 (+缓存) / 上限 警示标记。
-	// 占用比仍按含缓存的 current 算（systemd 判超限的口径），所以会出现
-	// "主数只有 9.1M 却标 !! 接近上限"——缓存段正是为了解释这件事而存在。
-	defer fakeCgroup(t, "api.service", "anon 9500000\ninactive_file 300000000\n")()
-	fields := map[string]string{"MemoryCurrent": "309500000"}
+func TestMemoryCellFileCacheDoesNotTriggerWarn(t *testing.T) {
+	// 回归 app3 场景：anon 只有 9M，但 page cache（file）有 300M。
+	// 旧口径按含缓存的 current 算占用比会误报"接近上限"；现在按 anon 算，9.0 MiB/320.0 MiB 远低于 80%，不该警示。
+	defer fakeCgroup(t, "api.service", "anon 9437184\nfile 314572800\n")()
+	fields := map[string]string{"MemoryCurrent": "323800064"}
 	svc := &config.Service{MemoryMax: "320M"}
 
 	got := memoryCell("api.service", svc, fields, false)
-	want := "9.1M (+286.1M 缓存) / 320.0M !! 接近上限"
-	if got != want {
-		t.Errorf("MEMORY = %q, want %q", got, want)
+	if !strings.HasPrefix(got, "9.0 MiB / 320.0 MiB") {
+		t.Errorf("MEMORY = %q, want 前缀 \"9.0 MiB / 320.0 MiB\"（anon 9437184）", got)
 	}
-	// 着色时整格上色（含缓存段），不得把 ANSI 码插在中间导致列宽错位；
-	// 期望值同样经 Colors.Sprint 生成，不假设当前环境真的输出 ANSI（CI 容器里可能不输出）
-	wantColored := text.Colors{text.FgRed}.Sprint(want)
-	if colored := memoryCell("api.service", svc, fields, true); colored != wantColored {
-		t.Errorf("着色输出应整格包裹，got %q want %q", colored, wantColored)
+	if strings.Contains(got, "!") {
+		t.Errorf("页缓存不该触发上限警示，got %q", got)
 	}
 }
 
@@ -223,9 +188,9 @@ func TestMemoryWarn(t *testing.T) {
 }
 
 func TestMemoryCellColorGate(t *testing.T) {
-	defer fakeCgroup(t, "api.service", "inactive_file 0\n")()
+	defer fakeCgroup(t, "api.service", "anon 314572800\n")()
 	svc := &config.Service{MemoryMax: "300M"}
-	hot := map[string]string{"MemoryCurrent": "300000000"}
+	hot := map[string]string{"MemoryCurrent": "314572800"}
 
 	withColor := memoryCell("api.service", svc, hot, true)
 	if !strings.Contains(withColor, "!!") {
@@ -273,17 +238,17 @@ func TestPsMemoryColumnWithLimit(t *testing.T) {
 	stdout = &bytes.Buffer{}
 	colorOverride = "never"
 	defer func() { stdout, colorOverride = oldOut, oldOverride }()
-	defer fakeCgroup(t, "api.service", "inactive_file 0\n")()
+	defer fakeCgroup(t, "api.service", "anon 1048576\n")()
 
 	cfg := &config.Config{Services: map[string]*config.Service{
 		"api": {Command: "/x/api", MemoryMax: "300M"},
 	}}
-	// fakeSys 的 MemoryCurrent=1048576（1.0M），上限 300M → 用量 <80%，无警示标记
+	// anon=1048576（1.0 MiB），上限 300M → 用量 <80%，无警示标记
 	if err := New(cfg, &fakeSys{}).Ps(); err != nil {
 		t.Fatal(err)
 	}
 	out := stdout.(*bytes.Buffer).String()
-	if !strings.Contains(out, "1.0M / 300.0M") {
+	if !strings.Contains(out, "1.0 MiB / 300.0 MiB") {
 		t.Errorf("ps 的 MEMORY 列应含上限，输出:\n%s", out)
 	}
 	if strings.Contains(out, "\x1b[") {
@@ -293,13 +258,13 @@ func TestPsMemoryColumnWithLimit(t *testing.T) {
 
 func TestMemoryCellZeroLimitNoPanic(t *testing.T) {
 	// memory_max 写成 "0" / "0K" / "0.0M" 一类时上限解析为 0：ps 是只读命令，
-	// 用 current*100/max 算占用比会整数除零 panic（曾实测复现）。
-	// 上限本身无效（systemd 语义等于不允许占用内存），展示 " / 0B" 即可，警示交给 up 的启动复核。
-	defer fakeCgroup(t, "api.service", "inactive_file 0\n")()
-	fields := map[string]string{"MemoryCurrent": "300000000"} // ≈286.1M
+	// 用 anon*100/max 算占用比会整数除零 panic（曾实测复现）。
+	// 上限本身无效（systemd 语义等于不允许占用内存），展示 " / 0 B" 即可，警示交给 up 的启动复核。
+	defer fakeCgroup(t, "api.service", "anon 300000000\n")()
+	fields := map[string]string{"MemoryCurrent": "300000000"} // ≈286.1 MiB
 	for _, limit := range []string{"0", "0K", "0.0M"} {
 		got := memoryCell("api.service", &config.Service{MemoryMax: limit}, fields, false)
-		if got != "286.1M / 0B" {
+		if got != "286.1 MiB / 0 B" {
 			t.Errorf("上限 %q 应展示用量与 0 上限，got %q", limit, got)
 		}
 		if strings.Contains(got, "!") {
@@ -311,14 +276,15 @@ func TestMemoryCellZeroLimitNoPanic(t *testing.T) {
 func TestPsWithZeroMemoryMaxNoPanic(t *testing.T) {
 	// 端到端兜底：整表渲染路径（Ps → renderPs → memoryCell）同样不得 panic。
 	out := capturePsOutput(t)
+	defer fakeCgroup(t, "api.service", "anon 1048576\n")()
 	cfg := &config.Config{Services: map[string]*config.Service{
 		"api": {Command: "/x/api", MemoryMax: "0"},
 	}}
 	if err := New(cfg, &fakeSys{}).Ps(); err != nil {
 		t.Fatal(err)
 	}
-	// fakeSys 的 MemoryCurrent=1048576（1.0M）
-	if s := out.String(); !strings.Contains(s, "1.0M / 0B") {
+	// anon=1048576（1.0 MiB）
+	if s := out.String(); !strings.Contains(s, "1.0 MiB / 0 B") {
 		t.Errorf("ps 应展示用量与 0 上限，输出:\n%s", s)
 	}
 }

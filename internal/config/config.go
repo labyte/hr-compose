@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -231,12 +232,74 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("服务 %q 的 log_file 必须是绝对路径（可带 glob，如 /var/log/app/*.log）: %q", name, svc.LogFile)
 		}
 		for _, dep := range svc.DependsOn {
+			if dep == name {
+				return fmt.Errorf("服务 %q 不能依赖自身（depends_on 含 %q）", name, dep)
+			}
 			if _, ok := c.Services[dep]; !ok {
 				return fmt.Errorf("服务 %q 的 depends_on 引用了未定义的服务 %q", name, dep)
 			}
 		}
 		if svc.DependsOnRequired && len(svc.DependsOn) == 0 {
 			return fmt.Errorf("服务 %q 设置了 depends_on_required 但未声明 depends_on", name)
+		}
+	}
+	if err := validateNoCycles(c.Services); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateNoCycles 检查 depends_on 是否存在循环依赖（含多节点环）。
+// 循环依赖会让 systemd 静默删掉其中一个 start 作业（日志里仅一句 "Found ordering cycle"），
+// 用户只会看到"某个服务莫名没起来"，故在 Load 阶段提前拦截并报出环路径。
+// 自依赖是单节点环的特例，已在 Validate 的 depends_on 循环里单独报错，此处不会再走到。
+func validateNoCycles(services map[string]*Service) error {
+	const (
+		unvisited = iota
+		visiting
+		done
+	)
+	state := make(map[string]int, len(services))
+	// 排序遍历保证首次命中的环路径稳定（map 遍历顺序随机，否则报错内容每次不同）。
+	names := make([]string, 0, len(services))
+	for n := range services {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	var path []string
+	var visit func(string) error
+	visit = func(n string) error {
+		switch state[n] {
+		case done:
+			return nil
+		case visiting:
+			// 回到仍在 DFS 栈上的节点即构成环：截取 path 中从 n 起的片段拼出完整环路径。
+			start := 0
+			for i, p := range path {
+				if p == n {
+					start = i
+					break
+				}
+			}
+			cycle := append(append([]string{}, path[start:]...), n)
+			return fmt.Errorf("服务 %q 的 depends_on 存在循环依赖: %s", n, strings.Join(cycle, " -> "))
+		}
+		state[n] = visiting
+		path = append(path, n)
+		for _, dep := range services[n].DependsOn {
+			if err := visit(dep); err != nil {
+				return err
+			}
+		}
+		path = path[:len(path)-1]
+		state[n] = done
+		return nil
+	}
+
+	for _, n := range names {
+		if err := visit(n); err != nil {
+			return err
 		}
 	}
 	return nil

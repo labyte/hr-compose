@@ -128,7 +128,7 @@ func (e *Engine) Up(names ...string) error {
 			errs = append(errs, notRunningError(n, reason))
 		}
 	}
-	if err := e.renderPs(justDone, states); err != nil {
+	if _, err := e.renderPs(justDone, states); err != nil {
 		errs = append(errs, fmt.Errorf("展示服务状态: %w", err))
 	}
 	if len(errs) > 0 {
@@ -212,26 +212,69 @@ func (e *Engine) Down(names ...string) error {
 	if err != nil {
 		return err
 	}
+	// 先查一次状态：据此只对"在跑"的服务执行 stop、只对"已安装"的服务执行 disable，
+	// 从而把 systemctl 对"未运行/未加载"服务返回的报错（not active / not loaded）与真正的失败区分开。
+	// 停止失败意味着进程可能还在跑，此时删掉 unit 文件会留下无法再被 hr-compose 管理的孤儿进程，
+	// 必须上报并跳过删除；状态查不到同理，连在不在跑都无法确定，宁可不删也不留孤儿。
+	states, err := e.fetchStates(targets)
+	if err != nil {
+		return fmt.Errorf("查询服务状态: %w", err)
+	}
+	var errs []error
 	for i := len(targets) - 1; i >= 0; i-- {
 		name := targets[i]
 		u := e.unitName(name)
-		_ = e.sys.Stop(u)    // 未运行时报错可忽略
-		_ = e.sys.Disable(u) // 未 enable 时报错可忽略
-		if err := removeIfManaged(filepath.Join(UnitDir, u)); err != nil {
-			return err
+		path := filepath.Join(UnitDir, u)
+		// 托管前置检查：文件存在但非 hr-compose 托管时，stop/disable 一样会作用于同名外来服务
+		// （同名系统服务）的进程，必须连同删除一起拒绝——此前托管保护只挡删除，stop/disable 仍会先动到它。
+		managed, exists, mErr := managedKind(path)
+		if mErr != nil {
+			errs = append(errs, mErr)
+			continue
 		}
-		fmt.Printf("down %s OK\n", name)
+		if exists && !managed {
+			errs = append(errs, fmt.Errorf("拒绝操作 %s：已存在同名 unit 且非 hr-compose 管理（如确需托管请先删除原文件）", path))
+			continue
+		}
+		fields := states[u]
+		load := fields["LoadState"]
+		switch {
+		case load == "not-found":
+			// 未安装：无进程可停、无 enable 可取消，unit 文件本就不存在，removeIfManaged 会 no-op。
+		case load == "":
+			// 状态查不到（systemctl 未返回该 unit 任何字段）：保守跳过删除。
+			errs = append(errs, fmt.Errorf("down %s: 无法确定服务状态，跳过删除", name))
+			continue
+		default:
+			if runningStates[fields["ActiveState"]] {
+				if err := e.sys.Stop(u); err != nil {
+					errs = append(errs, fmt.Errorf("停止 %s: %w", name, err))
+					continue // 没停成就不删文件，避免留下孤儿进程
+				}
+			}
+			if err := e.sys.Disable(u); err != nil {
+				errs = append(errs, fmt.Errorf("disable %s: %w", name, err))
+				continue // disable 失败则 symlink 残留，删文件会留下悬空软链，同样跳过删除
+			}
+		}
+		if err := removeIfManaged(path); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		fmt.Fprintf(stdout, "down %s OK\n", name)
 	}
 	if err := e.sys.DaemonReload(); err != nil {
-		return err
+		errs = append(errs, err)
+		return errors.Join(errs...)
 	}
 	if e.anyJournal(targets) {
 		if err := e.sys.ClearJournal(); err != nil {
-			return fmt.Errorf("清理 journal 日志: %w", err)
+			errs = append(errs, fmt.Errorf("清理 journal 日志: %w", err))
+		} else {
+			fmt.Fprintln(stdout, "已清空系统 journal 日志")
 		}
-		fmt.Println("已清空系统 journal 日志")
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // anyJournal 判断目标服务中是否存在使用 journal 日志输出的服务。
@@ -270,6 +313,19 @@ func writeIfManaged(path, content string) (unitWrite, error) {
 		return unitUnchanged, err
 	}
 	return unitReplaced, nil
+}
+
+// managedKind 检查 unit 文件是否存在及其托管状态：exists 表示文件存在，managed 表示带托管标记。
+// 读取失败（非 not-exist 的错误）返回 err，此时 managed/exists 不可信、调用方应跳过后续操作。
+func managedKind(path string) (managed, exists bool, err error) {
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	return strings.HasPrefix(string(b), unit.ManagedMark), true, nil
 }
 
 // removeIfManaged 只删除带 hr-compose 托管标记的文件，防止误删同名系统服务。

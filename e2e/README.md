@@ -39,7 +39,7 @@ ls /etc/systemd/system/demo-api.service                # 应不存在
 | `behavior-check.sh` | 改配置后重复 `up` 是否生效、`depends_on` 成环是否报错、字段值换行注入 unit、`command` 不存在的失败传播与复核（逐项 PASS/FAIL） |
 | `followup-check.sh` | 跨段注入（`description` 里塞 `[Service]`/`ExecStartPre=`）是否真的被 systemd 执行 |
 | `mem-check.sh` | `ps` 的内存读数与 `/proc/<pid>/smaps_rollup`、cgroup `memory.stat` 的对照 |
-| `memformula-check.sh`、`pagecache-check.sh` | working set 口径（`memory.current` 减 `inactive_file`）在写大文件服务上的表现 |
+| `memformula-check.sh`、`pagecache-check.sh` | `ps` 的匿名内存口径（`memory.stat` 的 `anon`，与系统监视器一致）在写大文件/加载代码服务上的表现 |
 
 ## CI
 

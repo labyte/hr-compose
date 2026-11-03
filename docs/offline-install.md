@@ -170,7 +170,8 @@ sudo hr-compose up                  # 生成 unit 到 /etc/systemd/system、enab
 `up` 是幂等的：重复执行不会重复创建或报错，unit 内容没变化时是空操作。想单点看状态随时执行：
 
 ```bash
-hr-compose ps                       # 带边框状态表：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME / DESCRIPTION
+hr-compose ps                       # 带边框状态表：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME
+hr-compose ps -w                    # 实时刷新状态表（Ctrl+C 退出）
 ```
 
 ### 3.5 查看日志

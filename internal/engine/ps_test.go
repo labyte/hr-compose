@@ -165,20 +165,23 @@ func TestPsColumns(t *testing.T) {
 	defer func() { stdout, colorOverride = oldOut, oldOverride }()
 
 	// fakeSys.Show 返回 active/running/enabled/123/1048576 + 单调启动时刻；
-	// 期望 UPTIME=50m、description 都出现在表中，且 CONFIG 列已移除
+	// 期望 UPTIME=50m，且 DESCRIPTION 列已移除
 	out := runPs(t, map[string]*config.Service{
 		"api": {Command: "/x/api", Description: "主业务 API"},
 	})
 	for _, want := range []string{
-		"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME", "DESCRIPTION",
-		"api", "running", "enabled", "1.0M", "50m", "主业务 API",
+		"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME",
+		"api", "running", "enabled", "1.0 MiB", "50m",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("输出应包含 %q\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "CONFIG") {
-		t.Errorf("ps 表不应再包含 CONFIG 列\n%s", out)
+	if strings.Contains(out, "DESCRIPTION") {
+		t.Errorf("ps 表不应再包含 DESCRIPTION 列\n%s", out)
+	}
+	if strings.Contains(out, "主业务 API") {
+		t.Errorf("ps 表不应再展示描述内容\n%s", out)
 	}
 }
 
@@ -261,124 +264,117 @@ func TestPsNotInstalledShowsNotFound(t *testing.T) {
 	}
 }
 
-func TestSnipToWidth(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		max  int
-		want string
-	}{
-		{"短于上限原样返回", "zs127", descWidthMax, "zs127"},
-		{"恰好等于上限原样返回", strings.Repeat("a", 40), 40, strings.Repeat("a", 40)},
-		{"超一个字符即截断补省略号", strings.Repeat("a", 41), 40, strings.Repeat("a", 37) + "..."},
-		// 汉字按 2 列计：18 个汉字 36 列 + "..." 3 列 = 39，再塞一个就超出 40 列
-		{"中文按显示宽度而非字符数截断", strings.Repeat("生", 25), 40, strings.Repeat("生", 18) + "..."},
-		{"空值原样返回", "", 40, ""},
+// countingSys 记录 ShowMany 调用次数，并在达到 stopAt 次后关闭 stopCh，用于驱动 ps --watch
+// 的循环在有限轮后确定性地退出（真实中断信号在单测里不易注入）。
+type countingSys struct {
+	fakeSys
+	showMany int
+	stopAt   int
+	stopCh   chan struct{}
+}
+
+func (c *countingSys) ShowMany(units []string) (map[string]map[string]string, error) {
+	c.showMany++
+	if c.stopCh != nil && c.showMany >= c.stopAt {
+		select {
+		case <-c.stopCh:
+		default:
+			close(c.stopCh)
+		}
 	}
-	for _, tc := range cases {
-		got := snipToWidth(tc.in, tc.max)
-		if got != tc.want {
-			t.Errorf("%s: snipToWidth = %q, want %q", tc.name, got, tc.want)
-		}
-		// 截断结果不得超过限定列宽，否则右边框会被顶歪
-		if w := text.StringWidthWithoutEscSequences(got); w > tc.max {
-			t.Errorf("%s: 结果显示宽度 %d 超过上限 %d（%q）", tc.name, w, tc.max, got)
-		}
+	return c.fakeSys.ShowMany(units)
+}
+
+func TestWatchPsLoopsUntilStop(t *testing.T) {
+	oldStop := watchStop
+	stopCh := make(chan struct{})
+	watchStop = stopCh
+	defer func() { watchStop = oldStop }()
+
+	sys := &countingSys{stopAt: 3, stopCh: stopCh}
+	out := capturePsOutput(t)
+	cfg := &config.Config{Services: map[string]*config.Service{"api": {Command: "/x/api"}}}
+	if err := New(cfg, sys).WatchPs(); err != nil {
+		t.Fatal(err)
+	}
+	if sys.showMany != 3 {
+		t.Errorf("应在 3 轮后停止刷新，实得 %d 轮", sys.showMany)
+	}
+	// 每轮渲染一份完整表格（各含一个 NAME 表头），三轮应出现 3 个 NAME
+	if got := strings.Count(out.String(), "NAME"); got != 3 {
+		t.Errorf("应渲染 3 份状态表（3 个 NAME 表头），实得 %d 个\n%s", got, out.String())
 	}
 }
 
-// 描述过长时必须截断成一行，而不是 go-pretty 默认的折行——折行会让一个服务占多行、整表散架。
-func TestPsDescriptionTruncatedNotWrapped(t *testing.T) {
-	oldOut, oldOverride := stdout, colorOverride
+func TestMoveCursorUp(t *testing.T) {
+	oldOut, oldTerm := stdout, termIsTerminal
 	stdout = &bytes.Buffer{}
-	colorOverride = "never"
-	defer func() { stdout, colorOverride = oldOut, oldOverride }()
+	termIsTerminal = func() bool { return true }
+	defer func() { stdout, termIsTerminal = oldOut, oldTerm }()
 
-	longCJK := "反复读取磁盘上的大文件以制造可回收页缓存用于验证内存口径是否正常显示不出错"
-	longASCII := "a very long ascii description that surely exceeds the forty column limit"
-	// resolve 无参时按名排序：api、reader
-	out := runPs(t, map[string]*config.Service{
-		"api":    {Command: "/x/api", Description: longASCII},
-		"reader": {Command: "/x/read", Description: longCJK},
-	})
+	moveCursorUp(3)
+	if got := stdout.(*bytes.Buffer).String(); got != "\x1b[3A" {
+		t.Errorf("moveCursorUp(3) 应输出上移序列，got %q", got)
+	}
 
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	// 上边框 + 表头 + 表头分隔线 + 2 行数据 + 下边框 = 6 行；一旦折行，数据行会翻倍
-	if len(lines) != 6 {
-		t.Errorf("描述超长时每个服务仍应只占一行（期望 6 行，实得 %d 行）:\n%s", len(lines), out)
+	// 0 或负数不输出
+	stdout = &bytes.Buffer{}
+	moveCursorUp(0)
+	if got := stdout.(*bytes.Buffer).String(); got != "" {
+		t.Errorf("moveCursorUp(0) 不应输出，got %q", got)
 	}
-	// 每行显示宽度必须一致，否则边框错位（中文按 2 列计，故用 go-pretty 的计宽函数）
-	border := text.StringWidthWithoutEscSequences(lines[0])
-	for i, l := range lines {
-		if w := text.StringWidthWithoutEscSequences(l); w != border {
-			t.Errorf("第 %d 行显示宽度 %d ≠ 边框 %d，表格错位:\n%s", i+1, w, border, out)
-		}
-	}
-	if !strings.Contains(out, "...") {
-		t.Errorf("超长描述应以省略号结尾:\n%s", out)
-	}
-	if strings.Contains(out, longCJK) || strings.Contains(out, longASCII) {
-		t.Errorf("超长描述应被截断，不该原样出现:\n%s", out)
-	}
-	// 短描述不受影响
-	if !strings.Contains(out, "NAME") || !strings.Contains(out, "DESCRIPTION") {
-		t.Errorf("表头缺失:\n%s", out)
+
+	// 非终端（管道/重定向）不输出，避免往文件里塞 ANSI 转义码
+	termIsTerminal = func() bool { return false }
+	stdout = &bytes.Buffer{}
+	moveCursorUp(3)
+	if got := stdout.(*bytes.Buffer).String(); got != "" {
+		t.Errorf("非终端下 moveCursorUp 不应输出，got %q", got)
 	}
 }
 
-func TestDescWidth(t *testing.T) {
-	// 前 6 列显示宽度：NAME 4 / STATUS 7 / ENABLED 7 / PID 7 / MEMORY 18（"38.8M (+100K 缓存)"，
-	// 汉字按 2 列计）/ UPTIME 6，加 8 条竖线与每列 2 个空格内边距，固定部分共 69 列
-	wideRows := [][]string{{
-		"app1", "running", "enabled", "2369314", "38.8M (+100K 缓存)", "35m11s", "第 7 列不参与固定宽度计算",
-	}}
-	cases := []struct {
-		name     string
-		termCols int
-		rows     [][]string
-		want     int
-	}{
-		{"非终端保持上限", 0, wideRows, descWidthMax},
-		{"负列宽按非终端处理", -1, wideRows, descWidthMax},
-		{"宽终端触上限", 200, wideRows, descWidthMax},
-		{"92 列终端把剩余宽度给描述列", 92, wideRows, 21},
-		{"恰好容纳满宽描述列", 111, wideRows, descWidthMax},
-		{"极窄终端保下限", 40, wideRows, descWidthMin},
-		// 无行数据时按表头计固定宽度：4+6+7+3+6+6 加竖线与内边距共 52 列，80-52-2=26
-		{"无行数据按表头计宽", 80, nil, 26},
+func TestClearToEndOfScreen(t *testing.T) {
+	oldOut, oldTerm := stdout, termIsTerminal
+	stdout = &bytes.Buffer{}
+	termIsTerminal = func() bool { return true }
+	defer func() { stdout, termIsTerminal = oldOut, oldTerm }()
+
+	clearToEndOfScreen()
+	if got := stdout.(*bytes.Buffer).String(); got != "\x1b[0J" {
+		t.Errorf("终端下 clearToEndOfScreen 应输出清尾序列，got %q", got)
 	}
-	for _, tc := range cases {
-		if got := descWidth(tc.termCols, tc.rows); got != tc.want {
-			t.Errorf("%s: descWidth(%d) = %d, want %d", tc.name, tc.termCols, got, tc.want)
-		}
+
+	termIsTerminal = func() bool { return false }
+	stdout = &bytes.Buffer{}
+	clearToEndOfScreen()
+	if got := stdout.(*bytes.Buffer).String(); got != "" {
+		t.Errorf("非终端下 clearToEndOfScreen 不应输出，got %q", got)
 	}
 }
 
-// 窄终端下描述列必须自动收窄，使整表宽度恰好等于终端列宽：超出终端宽度的表格会被终端
-// 拦腰折行（续行没有左边框），比折描述列难看得多。
-func TestPsTableFitsTerminalWidth(t *testing.T) {
-	oldTerm := termColumnsFunc
-	termColumnsFunc = func() int { return 80 }
-	defer func() { termColumnsFunc = oldTerm }()
+// 原位重绘：首轮直接打印表格（不做光标上移），之后每轮先上移回上一张表顶覆盖重绘，
+// 并在重绘后清"光标到屏幕末尾"（擦掉变矮时残留的行）。
+func TestWatchPsRedrawsInPlace(t *testing.T) {
+	oldStop, oldTerm := watchStop, termIsTerminal
+	stopCh := make(chan struct{})
+	watchStop = stopCh
+	termIsTerminal = func() bool { return true }
+	defer func() { watchStop, termIsTerminal = oldStop, oldTerm }()
 
-	longCJK := "反复读取磁盘上的大文件以制造可回收页缓存用于验证内存口径是否正常显示不出错"
-	out := runPs(t, map[string]*config.Service{
-		"api":    {Command: "/x/api", Description: longCJK},
-		"reader": {Command: "/x/read", Description: longCJK},
-	})
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	// 上边框 + 表头 + 表头分隔线 + 2 行数据 + 下边框 = 6 行；一旦折行，数据行会翻倍
-	if len(lines) != 6 {
-		t.Errorf("每个服务仍应只占一行（期望 6 行，实得 %d 行）:\n%s", len(lines), out)
+	sys := &countingSys{stopAt: 3, stopCh: stopCh}
+	out := capturePsOutput(t)
+	cfg := &config.Config{Services: map[string]*config.Service{"api": {Command: "/x/api"}}}
+	if err := New(cfg, sys).WatchPs(); err != nil {
+		t.Fatal(err)
 	}
-	// 整表每行显示宽度必须恰好等于终端列宽（go-pretty 会补齐内边距），既不被终端折行也不浪费宽度
-	for i, l := range lines {
-		if w := text.StringWidthWithoutEscSequences(l); w != 80 {
-			t.Errorf("第 %d 行显示宽度 %d ≠ 终端列宽 80:\n%s", i+1, w, out)
-		}
+	s := out.String()
+	// 单服务表高 5 行：上边框 + 表头 + 分隔线 + 1 数据行 + 下边框；第 2、3 轮各上移 5 行覆盖旧表
+	if got := strings.Count(s, "\x1b[5A"); got != 2 {
+		t.Errorf("第 2、3 轮应各上移 5 行覆盖旧表，实得 %d 次\n%s", got, s)
 	}
-	if !strings.Contains(out, "...") {
-		t.Errorf("描述列应被截断以适配终端宽度:\n%s", out)
+	// 非首轮每轮重绘后清尾一次（首轮不清，避免抹掉用户此前的输出）
+	if got := strings.Count(s, "\x1b[0J"); got != 2 {
+		t.Errorf("非首轮每轮都应清尾，实得 %d 次\n%s", got, s)
 	}
 }
 

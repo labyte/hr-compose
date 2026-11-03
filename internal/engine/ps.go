@@ -2,15 +2,16 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
@@ -25,12 +26,11 @@ var stdout io.Writer = os.Stdout
 var uptimeFile = "/proc/uptime"
 
 // Ps 打印服务状态。names 为空（nil/空切片）则展示 yml 中全部服务，否则只展示指定的服务
-// （未定义的名字报错，顺序按依赖拓扑）。列：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME / DESCRIPTION，
+// （未定义的名字报错，顺序按依赖拓扑）。列：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME，
 // 终端下状态列着色。STATUS=ActiveState、SubState 与 LoadState 合并（mergedState），
 // UPTIME=主进程运行时长（可判断是否重启过），ENABLED=UnitFileState（是否开机启动）。
-// MEMORY=working set（cgroup memory.current 扣掉可回收的 inactive_file，扣掉的量另以 "(+缓存)" 标出），
-// 配了 memory_max 时附 " / 上限"。
-// unit 实际文件路径见 config 命令预览。
+// MEMORY=匿名内存（cgroup memory.stat 的 anon，与系统监视器口径一致），配了 memory_max 时附 " / 上限"。
+// unit 实际文件路径见 config 命令预览；持续刷新见 WatchPs。
 func (e *Engine) Ps(names ...string) error {
 	targets, err := e.resolve(names...)
 	if err != nil {
@@ -40,7 +40,90 @@ func (e *Engine) Ps(names ...string) error {
 	if err != nil {
 		return err
 	}
-	return e.renderPs(targets, all)
+	_, err = e.renderPs(targets, all)
+	return err
+}
+
+// psWatchInterval 是 ps --watch 的刷新间隔。变量形式便于测试覆盖。
+var psWatchInterval = 2 * time.Second
+
+// watchStop 是 ps --watch 的中断信号源：收到（或 channel 关闭）即停止刷新。默认 nil，
+// WatchPs 内改用 signal.NotifyContext 监听 SIGINT（Ctrl+C）/SIGTERM；测试覆盖为手动关闭的
+// channel 以确定性地结束循环（真实信号在单测里不易注入）。
+var watchStop <-chan struct{}
+
+// termIsTerminal 判断 stdout 是否为终端（字符设备）。ps --watch 原位重绘用到的 ANSI 控制序列
+// （光标上移 / 从光标清到屏幕末尾）只在终端下生效，管道/重定向时不塞转义码。变量形式便于测试覆盖。
+var termIsTerminal = func() bool {
+	fi, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// moveCursorUp 输出 ANSI 光标上移序列，让下一轮状态表回到上一张表顶原位覆盖，而不是清整屏
+// （清整屏会抹掉用户此前的终端内容、留一大片空白）。仅 stdout 是终端时生效。
+func moveCursorUp(n int) {
+	if n <= 0 || !termIsTerminal() {
+		return
+	}
+	fmt.Fprintf(stdout, "\x1b[%dA", n)
+}
+
+// clearToEndOfScreen 输出 ANSI 从光标到屏幕末尾的清除序列（\x1b[0J）。原位重绘时用于擦掉
+// 上一轮比本轮多出的行（如终端变窄导致表格折行变高，下一轮回窄后留下的残行）。仅终端下生效。
+func clearToEndOfScreen() {
+	if !termIsTerminal() {
+		return
+	}
+	fmt.Fprint(stdout, "\x1b[0J")
+}
+
+// WatchPs 实时刷新状态表：先 resolve 一次固定目标集，之后按 psWatchInterval 周期重查、原位
+// 重绘（光标上移回表顶覆盖上一张表，而非清整屏），直到收到中断信号（Ctrl+C/SIGTERM）。
+// 查询与渲染复用 fetchStates/renderPs，与 Ps 的差异只是多一个循环与光标控制。
+func (e *Engine) WatchPs(names ...string) error {
+	targets, err := e.resolve(names...)
+	if err != nil {
+		return err
+	}
+
+	done := watchStop
+	var stop context.CancelFunc
+	if done == nil {
+		var ctx context.Context
+		ctx, stop = signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		done = ctx.Done()
+	}
+	if stop != nil {
+		defer stop()
+	}
+
+	prevLines := 0
+	for {
+		select {
+		case <-done:
+			return nil
+		default:
+		}
+		all, err := e.fetchStates(targets)
+		if err != nil {
+			return err
+		}
+		// 非首轮：光标上移回上一张表顶，新表原位覆盖旧表（不清整屏、不抹掉用户此前的输出）
+		moveCursorUp(prevLines)
+		lines, err := e.renderPs(targets, all)
+		if err != nil {
+			return err
+		}
+		// 首轮之后才清"光标到屏幕末尾"：擦掉上一轮比本轮多出的行（表格变矮时）
+		if prevLines > 0 {
+			clearToEndOfScreen()
+		}
+		prevLines = lines
+		sleepFunc(psWatchInterval)
+	}
 }
 
 // fetchStates 批量读取给定服务的 systemd 状态；批量结果里缺失的 unit（未加载）回退逐服务查询。
@@ -74,83 +157,27 @@ func (e *Engine) fetchStates(names []string) (map[string]map[string]string, erro
 	return all, nil
 }
 
-// descWidthMax 是 DESCRIPTION 列的最大显示宽度（中文/全角字符按 2 列计）。
-const descWidthMax = 40
+// psHeaders 是 ps 表头（6 列）。
+var psHeaders = []string{"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME"}
 
-// descWidthMin 是终端极窄时描述列的下限：再窄整表必然超出终端宽度，只能交给终端折行。
-const descWidthMin = 12
-
-// psHeaders 是 ps 表头（7 列）。前 6 列宽度由表头与单元格内容决定，
-// 第 7 列 DESCRIPTION 吃终端剩下的宽度（见 descWidth）。
-var psHeaders = []string{"NAME", "STATUS", "ENABLED", "PID", "MEMORY", "UPTIME", "DESCRIPTION"}
-
-// termColumnsFunc 返回 stdout 终端的列宽，变量形式便于测试覆盖（真实实现见 detectTermColumns）。
-var termColumnsFunc = detectTermColumns
-
-// detectTermColumns 经 ioctl TIOCGWINSZ 查询 stdout 的终端列宽。
-// stdout 不是终端（管道/重定向/CI）时返回 0，表示不做自适应限宽、描述列保持 descWidthMax。
-func detectTermColumns() int {
-	type winsize struct{ rows, cols, xpix, ypix uint16 }
-	var ws winsize
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, os.Stdout.Fd(), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
-	if errno != 0 || ws.cols == 0 {
-		return 0
-	}
-	return int(ws.cols)
-}
-
-// descWidth 计算 DESCRIPTION 列可用的显示宽度：go-pretty 渲染后整表宽度 =
-// 竖线数（列数+1）+ Σ(每列宽度+2 个空格内边距)，前 6 列宽度由表头与行内容决定，
-// 终端剩余宽度全让给描述列，整表才不会被终端折行（折行会把边框拦腰截断）。
-// termCols<=0（非终端）或剩余宽度超过上限时取 descWidthMax；终端极窄时保底 descWidthMin。
-func descWidth(termCols int, rows [][]string) int {
-	if termCols <= 0 {
-		return descWidthMax
-	}
-	fixed := len(psHeaders) + 1 // 竖线
-	for i, h := range psHeaders[:len(psHeaders)-1] {
-		w := text.StringWidthWithoutEscSequences(h)
-		for _, r := range rows {
-			if cw := text.StringWidthWithoutEscSequences(r[i]); cw > w {
-				w = cw
-			}
-		}
-		fixed += w + 2
-	}
-	w := termCols - fixed - 2 // 描述列自身的 2 个空格内边距
-	switch {
-	case w > descWidthMax:
-		return descWidthMax
-	case w < descWidthMin:
-		return descWidthMin
-	}
-	return w
-}
-
-// snipToWidth 是描述列的限宽器：超过 maxWidth 列就截断并以 "..." 结尾，**不换行**。
-// 交给 go-pretty 的 text.Snip 做——它按显示宽度计（一个汉字算 2 列）且计宽时剥离 ANSI
-// 转义码，不会截出"半个汉字"的宽度导致右边框错位。
-func snipToWidth(s string, maxWidth int) string {
-	return text.Snip(s, maxWidth, "...")
-}
-
-// renderPs 按给定状态数据渲染状态表（names 是展示顺序）。与 fetchStates 分开，
+// renderPs 按给定状态数据渲染状态表（names 是展示顺序），返回渲染出的行数（供 WatchPs
+// 原位重绘时把光标上移这么多行回到表顶）。与 fetchStates 分开，
 // 便于 up 先查一次状态做启动复核、再用同一份数据画表，不重复调用 systemctl。
-func (e *Engine) renderPs(names []string, all map[string]map[string]string) error {
+func (e *Engine) renderPs(names []string, all map[string]map[string]string) (int, error) {
 	// 开机时长只读一次，供全部服务的 UPTIME 列复用
 	boot, bootErr := readUptime()
 	on := colorsOn()
 	syncTextColors(on)
 
-	// 先攒出全部行再画表：描述列宽度要按终端列宽与前 6 列实际内容算，得先知道行内容
-	rows := make([][]string, 0, len(names))
+	t := table.NewWriter()
+	t.AppendHeader(toRow(psHeaders))
 	for _, name := range names {
 		svc := e.cfg.Services[name]
 		fields, ok := all[e.unitName(name)]
 		if !ok {
 			// Show 完全失败（如 systemctl 不可用/无任何输出）时按空状态展示；
 			// 未安装的 unit 在正常 systemd 下能取到 LoadState=not-found，会走下方 not-found 分支
-			rows = append(rows, []string{name, "-", "-", "-", "-", "-", valueOrDash(svc.Description)})
+			t.AppendRow(toRow([]string{name, "-", "-", "-", "-", "-"}))
 			continue
 		}
 		var colors text.Colors
@@ -164,36 +191,27 @@ func (e *Engine) renderPs(names []string, all map[string]map[string]string) erro
 			}
 		}
 		// go-pretty 计算列宽时会剥离 ANSI 转义，可安全用 Sprint 生成的彩色字符串作为单元格
-		rows = append(rows, []string{
+		t.AppendRow(toRow([]string{
 			name,
 			colors.Sprint(mergedState(fields["ActiveState"], fields["SubState"], fields["LoadState"])),
 			valueOrDash(fields["UnitFileState"]),
 			pidOrDash(fields["MainPID"]),
 			memoryCell(e.unitName(name), svc, fields, on),
 			up,
-			valueOrDash(svc.Description),
-		})
+		}))
 	}
-
-	t := table.NewWriter()
-	t.AppendHeader(toRow(psHeaders))
-	t.SetColumnConfigs([]table.ColumnConfig{
-		// 描述列超长时截断而不是换行：默认的 text.WrapText 会把长描述折成两三行，
-		// 一个服务占多行，整表就散架、难以逐行扫读；宽度按终端自适应（descWidth），
-		// 窄终端下整表也不会超出终端被折行。完整描述见 hr-compose.yml 或 config 命令。
-		{Number: 7, WidthMax: descWidth(termColumnsFunc(), rows), WidthMaxEnforcer: snipToWidth},
-	})
 	t.SetStyle(table.StyleLight)
-	for _, r := range rows {
-		t.AppendRow(toRow(r))
-	}
 	// 先渲染到缓冲区再写 stdout：边框字符要统一着暗灰色（dimBorders），
 	// go-pretty 直接 mirror 到 stdout 就拿不到渲染结果了
 	buf := &bytes.Buffer{}
 	t.SetOutputMirror(buf)
 	t.Render()
-	_, err := fmt.Fprint(stdout, dimBorders(buf.String(), on))
-	return err
+	raw := buf.String()
+	if _, err := fmt.Fprint(stdout, dimBorders(raw, on)); err != nil {
+		return 0, err
+	}
+	// go-pretty 渲染结果每行以 \n 结尾，换行数即表高，供 WatchPs 原位重绘时上移回表顶。
+	return strings.Count(raw, "\n"), nil
 }
 
 // toRow 把字符串切片转成 go-pretty 的 Row（[]interface{}）。
@@ -210,28 +228,22 @@ func toRow(cells []string) table.Row {
 // cgroup v1 或混合层级下该路径不存在，读不到时内存展示自动回退 systemd 的 MemoryCurrent。
 var cgroupBase = "/sys/fs/cgroup"
 
-// memoryCell 组装 ps 的 MEMORY 单元格，口径见 workingSetSplit：
-// 基本形态是 "<working set>"，读得到 cgroup 且存在可回收缓存时成 "<working set> (+<缓存>)"，
-// 配置了 memory_max 再追加 " / <上限>"，并在用量逼近上限时给出警示标记/配色。
-// 拿不到内存数据（unit 未安装、未启用 MemoryAccounting、systemd 输出字面量 "[not set]"、
-// 老版本的 2^64-1 哨兵值）时统一显示 "-"（上限一并不显示），不把 systemd 的内部字面量透给用户。
+// memoryCell 组装 ps 的 MEMORY 单元格：展示服务的**匿名内存**（堆/栈/私有数据），
+// 与系统监视器对单个进程显示的"内存"口径一致——不含可回收的文件页缓存（程序代码、共享库、
+// 读过的数据文件），也不含共享内存/内核 slab/页表等开销。这样 app3 这类只加载代码、不做业务
+// 文件 I/O 的服务，显示的就是它真正"用掉"的内存，而不是被页缓存撑大的 memory.current。
+// 优先读 cgroup v2 memory.stat 的 anon（按 service 聚合全部进程），读不到 cgroup（v1/混合层级/
+// 无权限）或 memory.stat 无 anon 行时回退 systemd 的 MemoryCurrent。
+// 配置了 memory_max 时追加 " / 上限"，占用比按同一 anon 口径算——anon 逼近上限才真的会 OOM，
+// 文件页缓存可被内核回收、逼近上限也不会触发 OOM，用含缓存的 current 算反而会对只做文件 I/O 的
+// 服务虚报警告。拿不到内存数据（unit 未安装、MemoryCurrent 为 "[not set]"/2^64 哨兵且读不到 anon）
+// 时统一显示 "-"（上限一并不显示），不把 systemd 的内部字面量透给用户。
 func memoryCell(unitName string, svc *config.Service, fields map[string]string, on bool) string {
-	cur, haveCur := memCurrentBytes(fields["MemoryCurrent"])
-	if !haveCur {
+	used, have := serviceMemory(unitName, fields)
+	if !have {
 		return "-"
 	}
-	shown := formatUintBytes(cur)
-	// 读得到 cgroup 原生接口时改用 working set（剔除可回收页缓存），并把扣掉的那部分单独标出来：
-	// 主数 + 缓存 = memory.current，正是下面算占用比、也是 systemd 判超限/OOM 用的口径，
-	// 否则"主数只有 9.1M 却标 !! 接近上限"看不出原因。读不到 cgroup 时不编造缓存数，只留单值。
-	if stat, ok := readMemoryStat(filepath.Join(cgroupBase, "system.slice", unitName, "memory.stat")); ok {
-		if ws, cache, ok2 := workingSetSplit(cur, stat); ok2 {
-			shown = formatUintBytes(ws)
-			if cache > 0 { // 缓存为 0 时不加 "(+0B 缓存)" 这种噪声
-				shown += " (+" + formatUintBytes(cache) + " 缓存)"
-			}
-		}
-	}
+	shown := formatUintBytes(used)
 	if svc.MemoryMax == "" {
 		return shown
 	}
@@ -245,9 +257,7 @@ func memoryCell(unitName string, svc *config.Service, fields map[string]string, 
 	if max == 0 {
 		return shown
 	}
-	// 上限占用比用含页缓存的 current 计算：systemd 判超限/OOM 用的就是这个数，
-	// 与主数（working set，已剔除可回收缓存）口径不同，故只作为"离上限还有多远"的比值。
-	if mark, colors := memoryWarn(cur * 100 / max); mark != "" {
+	if mark, colors := memoryWarn(used * 100 / max); mark != "" {
 		if !on {
 			colors = nil // 颜色关闭时只留 ASCII 标记（管道/重定向场景）
 		}
@@ -264,7 +274,7 @@ func pidOrDash(pid string) string {
 	return pid
 }
 
-// memoryWarn 按内存用量比（current / memory_max，百分比）返回警示标记与配色：
+// memoryWarn 按内存占用比（匿名内存 / memory_max，百分比）返回警示标记与配色：
 //   - >=90% 红色 "!!"：离被内核杀掉只剩一点余量
 //   - 80%~90% 黄色 "!"：偏高，值得看一眼
 //   - 其余不警示，避免正常服务的输出里全是噪声
@@ -278,21 +288,17 @@ func memoryWarn(pct uint64) (string, text.Colors) {
 	return "", nil
 }
 
-// workingSetSplit 按 Kubernetes working set 同口径算服务"真正需要"的内存：
-// memory.current 减去 memory.stat 的 inactive_file（内核可随时回收的页缓存），
-// 并把扣掉的那部分单独返回，供 ps 展示成 "用量 (+缓存)"。
-// 业务读写磁盘文件时，页缓存会被记到第一个触碰它的 cgroup 的 memory.current 上，
-// 直接用 current 会把 300M 文件缓存算进"内存占用"，且这个数还会随内核回收动作来回抖动。
-// ws + cache 恒等于 current，也就是 systemd 判超限/OOM 用的那个数，两个口径因此可对账；
-// inactive_file >= current 的异常组合一律按"扣 0"处理，不让无符号减法下溢。
-func workingSetSplit(current uint64, stat map[string]uint64) (ws, cache uint64, ok bool) {
-	if stat == nil {
-		return 0, 0, false
+// serviceMemory 返回服务的内存占用（匿名内存，与系统监视器口径一致）：
+// 优先读 cgroup v2 memory.stat 的 anon（service 内全部进程的堆/栈/私有数据），
+// 读不到 cgroup（v1/混合层级/无权限）或 memory.stat 无 anon 行时回退 systemd 的 MemoryCurrent。
+// 不回退时用 memCurrentBytes 统一处理 "[not set]"/2^64 哨兵值（返回 ok=false）。
+func serviceMemory(unitName string, fields map[string]string) (uint64, bool) {
+	if stat, ok := readMemoryStat(filepath.Join(cgroupBase, "system.slice", unitName, "memory.stat")); ok {
+		if anon, ok2 := stat["anon"]; ok2 {
+			return anon, true
+		}
 	}
-	if f := stat["inactive_file"]; f < current {
-		return current - f, f, true
-	}
-	return current, 0, true
+	return memCurrentBytes(fields["MemoryCurrent"])
 }
 
 // readMemoryStat 解析 cgroup v2 的 memory.stat（每行 "键 数值"，数值单位字节）。
@@ -469,16 +475,21 @@ func valueOrDash(s string) string {
 	return s
 }
 
-// formatUintBytes 把字节数格式化为友好单位（G/M 保留一位小数，K 取整）。
+// formatUintBytes 把字节数格式化为友好单位，统一采用二进制（IEC，1024 进制）的 B/KiB/MiB/GiB/TiB，
+// 数值保留一位小数。这与 systemd 的体积口径一致（memory_max 的 M/G 即 1024 进制），
+// 让 `memory_max: 300M` 显示为 "300.0 MiB" 而非十进制换算出的 "314.6 MB"，写入值能原样读回。
+// 单位取 IEC 的 "MiB" 而非系统监视器默认的十进制 "MB"，避免 "MB" 在 1000/1024 进制上的歧义。
 func formatUintBytes(n uint64) string {
 	switch {
+	case n >= 1<<40:
+		return fmt.Sprintf("%.1f TiB", float64(n)/(1<<40))
 	case n >= 1<<30:
-		return fmt.Sprintf("%.1fG", float64(n)/(1<<30))
+		return fmt.Sprintf("%.1f GiB", float64(n)/(1<<30))
 	case n >= 1<<20:
-		return fmt.Sprintf("%.1fM", float64(n)/(1<<20))
+		return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
 	case n >= 1<<10:
-		return fmt.Sprintf("%.0fK", float64(n)/(1<<10))
+		return fmt.Sprintf("%.1f KiB", float64(n)/(1<<10))
 	default:
-		return fmt.Sprintf("%dB", n)
+		return fmt.Sprintf("%d B", n)
 	}
 }
