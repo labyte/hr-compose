@@ -294,7 +294,7 @@ func TestWatchPsLoopsUntilStop(t *testing.T) {
 	sys := &countingSys{stopAt: 3, stopCh: stopCh}
 	out := capturePsOutput(t)
 	cfg := &config.Config{Services: map[string]*config.Service{"api": {Command: "/x/api"}}}
-	if err := New(cfg, sys).WatchPs(); err != nil {
+	if err := New(cfg, sys).WatchPs(time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if sys.showMany != 3 {
@@ -303,6 +303,15 @@ func TestWatchPsLoopsUntilStop(t *testing.T) {
 	// 每轮渲染一份完整表格（各含一个 NAME 表头），三轮应出现 3 个 NAME
 	if got := strings.Count(out.String(), "NAME"); got != 3 {
 		t.Errorf("应渲染 3 份状态表（3 个 NAME 表头），实得 %d 个\n%s", got, out.String())
+	}
+}
+
+func TestWatchPsRejectsNonPositiveInterval(t *testing.T) {
+	cfg := &config.Config{Services: map[string]*config.Service{"api": {Command: "/x/api"}}}
+	for _, bad := range []time.Duration{0, -time.Second} {
+		if err := New(cfg, &fakeSys{}).WatchPs(bad); err == nil {
+			t.Errorf("间隔 %v 应报错，未报错", bad)
+		}
 	}
 }
 
@@ -364,7 +373,7 @@ func TestWatchPsRedrawsInPlace(t *testing.T) {
 	sys := &countingSys{stopAt: 3, stopCh: stopCh}
 	out := capturePsOutput(t)
 	cfg := &config.Config{Services: map[string]*config.Service{"api": {Command: "/x/api"}}}
-	if err := New(cfg, sys).WatchPs(); err != nil {
+	if err := New(cfg, sys).WatchPs(time.Second); err != nil {
 		t.Fatal(err)
 	}
 	s := out.String()

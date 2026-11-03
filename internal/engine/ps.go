@@ -44,8 +44,8 @@ func (e *Engine) Ps(names ...string) error {
 	return err
 }
 
-// psWatchInterval 是 ps --watch 的刷新间隔。变量形式便于测试覆盖。
-var psWatchInterval = 2 * time.Second
+// DefaultWatchInterval 是 ps --watch 的默认刷新间隔（不传 --interval/-i 时的取值）。
+const DefaultWatchInterval = 2 * time.Second
 
 // watchStop 是 ps --watch 的中断信号源：收到（或 channel 关闭）即停止刷新。默认 nil，
 // WatchPs 内改用 signal.NotifyContext 监听 SIGINT（Ctrl+C）/SIGTERM；测试覆盖为手动关闭的
@@ -80,10 +80,14 @@ func clearToEndOfScreen() {
 	fmt.Fprint(stdout, "\x1b[0J")
 }
 
-// WatchPs 实时刷新状态表：先 resolve 一次固定目标集，之后按 psWatchInterval 周期重查、原位
+// WatchPs 实时刷新状态表：先 resolve 一次固定目标集，之后按 interval 周期重查、原位
 // 重绘（光标上移回表顶覆盖上一张表，而非清整屏），直到收到中断信号（Ctrl+C/SIGTERM）。
 // 查询与渲染复用 fetchStates/renderPs，与 Ps 的差异只是多一个循环与光标控制。
-func (e *Engine) WatchPs(names ...string) error {
+// interval 是刷新间隔，须为正数（cli 层 --interval/-i 传入，默认 DefaultWatchInterval）。
+func (e *Engine) WatchPs(interval time.Duration, names ...string) error {
+	if interval <= 0 {
+		return fmt.Errorf("刷新间隔必须为正数，实得 %v", interval)
+	}
 	targets, err := e.resolve(names...)
 	if err != nil {
 		return err
@@ -122,7 +126,7 @@ func (e *Engine) WatchPs(names ...string) error {
 			clearToEndOfScreen()
 		}
 		prevLines = lines
-		sleepFunc(psWatchInterval)
+		sleepFunc(interval)
 	}
 }
 

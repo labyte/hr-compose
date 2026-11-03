@@ -146,7 +146,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 | `restart [name...]` | 重启指定服务，不指定则全部；与 `start` 同样在收尾复核进程是否真的起来了，未起来的逐条报原因并以非 0 退出 | `sudo hr-compose restart api web` |
 | `enable [name...]` | 设置服务开机启动（仅 enable，不启停），不指定则全部 | `sudo hr-compose enable api` |
 | `disable [name...]` | 取消服务开机启动（仅 disable，不删 unit），不指定则全部 | `sudo hr-compose disable api` |
-| `ps [-w]` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / PID / MEMORY 用量与上限 / UPTIME 运行时长），内存按匿名内存（与系统监视器口径一致，不含可回收页缓存）计算并转友好单位，终端下状态彩色显示、边框着暗灰（线条视觉上更细更暗，突出数据）；`-w`/`--watch` 实时刷新（默认每 2 秒在原表位置覆盖重绘，Ctrl+C 退出） | `hr-compose ps -w` |
+| `ps [-w]` | 带边框列出服务状态表（STATUS 合并状态 / ENABLED 开机启动 / PID / MEMORY 用量与上限 / UPTIME 运行时长），内存按匿名内存（与系统监视器口径一致，不含可回收页缓存）计算并转友好单位，终端下状态彩色显示、边框着暗灰（线条视觉上更细更暗，突出数据）；`-w`/`--watch` 实时刷新（默认每 2 秒在原表位置覆盖重绘，Ctrl+C 退出，`-i`/`--interval` 自定义刷新间隔） | `hr-compose ps -w` |
 | `logs [name...] [-f]` | 查看日志；`-f` 实时跟踪，按 `std_output` 分发（多个服务逐个查看）；`std_output=null` 且配了 `log_file` 时直接 tail 业务日志（`log_file` 支持 glob，解析到 mtime 最新的文件，适配 NLog 一类按日期切文件的业务库） | `hr-compose logs api -f` |
 | `config [name...] [--real]` | 校验 yml 并打印 service 内容：默认打印生成的 unit 预览（段头标注"预览"与完整 unit 文件路径）；`--real` 读取磁盘上实际的 unit 文件（段头标注"实际文件"，文件不存在时给出提示，可用于对比预览与实际差异） | `hr-compose config api --real` |
 

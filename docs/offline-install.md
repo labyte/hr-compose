@@ -172,6 +172,7 @@ sudo hr-compose up                  # 生成 unit 到 /etc/systemd/system、enab
 ```bash
 hr-compose ps                       # 带边框状态表：NAME / STATUS / ENABLED / PID / MEMORY / UPTIME
 hr-compose ps -w                    # 实时刷新状态表（Ctrl+C 退出）
+hr-compose ps -w -i 1s              # 每 1 秒刷新（-i/--interval 自定义间隔，如 500ms、5s）
 ```
 
 ### 3.5 查看日志
