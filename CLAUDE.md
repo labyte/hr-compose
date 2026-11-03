@@ -33,6 +33,7 @@ make cross        # 交叉编译 linux/amd64 + linux/arm64 + darwin/arm64
 - 跑单个测试：`go test ./internal/engine -run TestOrderDependsFirst -v`
 - CI（`.github/workflows/ci.yml`）依次跑：`go vet ./...` → `go test -race ./...` → golangci-lint（`golangci-lint-action@v9` + `version: v2.15`）→ `make cross`。
 - `e2e/smoke.sh` 是端到端冒烟（真实 systemd + root，单测环境跑不了），已接入 CI 的 e2e job（ubuntu runner 以 sudo 执行 up/ps/stop/start/down）；本地 Linux 可 `bash e2e/smoke.sh` 直接跑。
+- **发布新 tag 时同步更新文档版本号**：`README.md` 与 `offline-install.md` 标题后一行的"当前版本"都要随 tag 一并改成新版本号（如 `v0.5.5`），保持一致，勿只打 tag 不改文档。发布流程：`git tag -a vX.Y.Z -m "..." && git push origin main && git push origin vX.Y.Z`（tag 触发 goreleaser 出正式产物）；本地二进制版本经 `make build` 的 ldflags 注入，tag 之后需重新 `make build` 才会显示新版本。
 
 ## 架构与数据流
 

@@ -1,5 +1,7 @@
 # hr-compose 离线安装与使用指南
 
+> 当前版本：**v0.5.4**
+
 > 适用于**目标服务器无外网 / 受限内网**环境。本文假设你已经拿到了发行包（tar.gz），从「安装 → 使用 → 更新卸载」全流程说明。
 
 ---
@@ -256,4 +258,4 @@ sudo rm /usr/local/bin/hr-compose         # 2. 删除二进制（自定义目录
 - **`ps` 状态列为 `not-found`**：unit 未安装（还没 `up`，或已被 `down` 清理）时显示 `not-found`（未安装），与已安装但停止的 `stopped` 区分；仅当 systemctl 完全无输出时状态列显示 `-`，两种情况都不报错。
 - **卸载后日志残留**：`down` 在存在 journal 服务时会清空**整个系统** journal（journald 不支持按 unit 删除），与 hr-compose 无直接关联的日志也会被清空，属已知行为。
 
-更多细节与完整字段说明见项目根目录 [README](../README.md)。
+更多细节与完整字段说明见项目根目录 [README](README.md)。

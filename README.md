@@ -1,5 +1,7 @@
 # hr-compose
 
+> 当前版本：**v0.5.4**
+
 > 对标 docker-compose 的本地服务编排工具（CLI）：读一份 `hr-compose.yml`，基于 systemd 在 Linux 裸机上管理多个业务服务的启停与编排。
 
 ```bash
@@ -71,7 +73,7 @@ hr-compose --help
 
 > 平台对应：`uname -m` 输出 `x86_64` → `amd64`，`aarch64` / `arm64` → `arm64`；macOS 本地用 `hr-compose_1.0.0_darwin_arm64.tar.gz`。也可在 [Releases 页面](https://github.com/labyte/hr-compose/releases) 直接下载对应平台压缩包。
 
-> 完整离线流程（含校验、安装、使用、更新卸载）见 [docs/offline-install.md](docs/offline-install.md)。
+> 完整离线流程（含校验、安装、使用、更新卸载）见 [offline-install.md](offline-install.md)。
 
 ### 更新
 
