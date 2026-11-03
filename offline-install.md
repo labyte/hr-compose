@@ -44,7 +44,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc   # zsh 则写入 ~/.zs
 source ~/.bashrc
 ```
 
-### 2.3 安装命令补全（可选）
+### 2.3 安装命令补全（推荐好用）
 
 ```bash
 hr-compose completion install      # 自动写入当前 shell 配置（bash/zsh/fish），新开终端生效
