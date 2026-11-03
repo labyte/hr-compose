@@ -66,9 +66,10 @@ hr-compose --version               # 打印版本号
 
 ```bash
 hr-compose init                    # 生成默认 hr-compose.yml 模板（已存在则不覆盖）
+hr-compose init services           # 扫描 services/ 子文件夹，每个子文件夹生成一个服务的初始配置
 ```
 
-`init` 生成的模板默认包含 `api` / `web` 两个示例服务（最小配置，`web` 依赖 `api`），演示 `depends_on` 依赖写法，可直接按需修改或删除。
+`init` 生成的模板默认包含 `api` / `web` 两个示例服务（最小配置，`web` 依赖 `api`），演示 `depends_on` 依赖写法，可直接按需修改或删除。指定目录时（如 `hr-compose init services`）扫描其直接子文件夹，每个子文件夹作为一个服务，只写 `command` 与 `working_dir`，不含依赖；`command` 探测不到时用 `./<name>` 占位并加 TODO 提示。
 
 ### 3.2 编辑 `hr-compose.yml`
 
@@ -206,7 +207,7 @@ sudo hr-compose down                # 逆序停止所有服务、disable、删�
 
 | 命令 | 说明 | 是否需要 root |
 | --- | --- | --- |
-| `init` | 生成默认 `hr-compose.yml` 模板 | 否 |
+| `init [services-dir]` | 生成默认 `hr-compose.yml` 模板；指定目录时扫描子文件夹生成服务列表 | 否 |
 | `config [name...]` | 校验 yml、预览生成的 unit | 否 |
 | `up [name...]` | 生成 unit + enable + start（幂等；指定名字时带上其依赖） | 是 |
 | `ps` | 查看服务状态表 | 否 |

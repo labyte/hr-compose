@@ -137,7 +137,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 
 | 命令 | 说明 | 示例 |
 | --- | --- | --- |
-| `init` | 生成默认 `hr-compose.yml` 模板（已存在则不覆盖） | `hr-compose init` |
+| `init [services-dir]` | 生成默认 `hr-compose.yml` 模板（已存在则不覆盖）；指定目录时扫描其直接子文件夹，每个子文件夹生成一个服务的初始配置（`command` + `working_dir`，不含依赖） | `hr-compose init` / `hr-compose init services` |
 | `up [name...]` | 生成 unit 并启动服务：指定名字时自动带上其 `depends_on` 依赖（递归），不指定则全部；依赖者先启动，无依赖关系按 yml 声明顺序；重复执行幂等，unit 内容变化且服务在运行中时自动改为 restart；完成后复核启动结果并展示各服务状态，没起来的服务逐条报原因并以非 0 退出 | `sudo hr-compose up web` |
 | `start [name...]` | 启动已安装的服务（不重生成 unit），不指定则全部；需先 `up` 过。systemctl 返回 0 只代表任务受理，故收尾会复核进程是否真的起来了：复核通过才打印 OK，未起来的逐条报原因并以非 0 退出 | `sudo hr-compose start api web` |
 | `stop [name...]` | 停止服务（保留 unit 与 enable，不删除），不指定则全部 | `sudo hr-compose stop api` |
