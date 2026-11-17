@@ -1,6 +1,6 @@
 # hr-compose
 
-> 当前版本：**v0.5.4**
+> 当前版本：**v0.6.0**
 
 > 对标 docker-compose 的本地服务编排工具（CLI）：读一份 `hr-compose.yml`，基于 systemd 在 Linux 裸机上管理多个业务服务的启停与编排。
 
@@ -10,7 +10,7 @@ hr-compose up / down / restart / ps / logs / config
 
 - **复用 systemd**：进程监控、自启、重启、日志全部交给 systemd，工具本身是单一二进制、无外部依赖
 - **裸机优先**：生成 systemd unit 文件，无容器
-- **yml 即事实来源**：只管理当前目录 `hr-compose.yml` 中定义的服务
+- **yml 即事实来源**：只管理所读取 `hr-compose.yml` 中定义的服务（当前目录优先，缺失时回退用户主目录，同一份配置在任意目录可用）
 
 ---
 
@@ -154,7 +154,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 
 > 所有接受服务名的命令（`up`/`down`/`start`/`stop`/`restart`/`enable`/`disable`/`clean`/`logs`/`config`）都支持一次指定多个服务，如 `hr-compose restart api web`；不指定则作用于全部。`up` 指定服务会**自动带上其 `depends_on` 依赖**（docker-compose 风格，首次 `up web` 会连 `api` 一起安装启动）；`down` 指定服务**只清理指定的**，不连带依赖，需连带清理时显式列出。
 
-全局参数：`--file <path>` 指定编排文件（默认当前目录 `hr-compose.yml`）。注意 `-f` 是 `logs` 的 `--follow` 简写。
+全局参数：`--file <path>` 指定编排文件。未指定时先找当前目录的 `hr-compose.yml`，当前目录没有则回退到执行用户主目录下的 `hr-compose.yml`（`sudo` 下取 `SUDO_USER` 的家目录），因此同一份配置在不同目录都能直接用；两处都没有时报错并列出查找过的位置。`--file` 显式指定后不再回退。注意 `-f` 是 `logs` 的 `--follow` 简写。
 
 ### ps 状态列说明
 
@@ -178,7 +178,7 @@ unit 实际文件路径不在此展示，用 `hr-compose config` 预览时会在
 
 ## 编排文件参考
 
-默认读取当前目录的 `hr-compose.yml`。
+默认读取当前目录的 `hr-compose.yml`；当前目录没有时回退到执行用户主目录下的 `hr-compose.yml`（`~`，`sudo` 下为 `SUDO_USER` 的家目录）。`--file` 可显式指定路径，指定后不再回退。
 
 ### 最小配置示例
 
@@ -304,7 +304,8 @@ services:
 - **`command` 必须前台运行**：值直接作为 `ExecStart`，业务程序不能 daemonize，否则 systemd 会认为服务未启动。
 - **改完配置要重新 `up`**：`systemctl start` 对已 active 的 unit 是 no-op，只 `daemon-reload` 不重启的话新配置对运行中的进程不生效。`up` 在 unit 内容变化且服务正在运行时自动改用 `restart`；内容没变时幂等跳过，不会白重启。查不到运行状态时（systemctl 不可用、连不上总线等）也按 `restart` 处理并打印一行警告——退回 `start` 会让改动静默失效却仍报"已启动"。
 - **`up`/`start`/`restart` 会复核启动结果**：`systemctl start` 返回 0 只代表 systemd 受理了任务，`command` 路径不存在时它照样返回 0（`Restart=always` 使服务进入 auto-restart 循环）。三个命令收尾都读 systemd 状态复核：复核通过才打印 OK，进程没活着的服务逐条报出原因（转述 systemd 自己的口径，如 `退出码 203/EXEC：command 指定的可执行文件不存在或不可执行`、`Result=start-limit-hit`、`oom-kill` 指向 `memory_max`）并让命令以非 0 退出。`up` 单个服务失败不中断其余服务；`start`/`restart` 遇到 systemctl 直接报错（如 unit 不存在、权限不足）则不再提交后续服务。仍在启动过程中（如 `start_delay` 计时中）不算失败。
-- **project 由 `name` 界定**：工具只管理当前目录 `hr-compose.yml` 中定义的服务，不扫描系统上其他 unit；同一 `name:` 下的 unit 归属该 project，不同 project 互不影响。
+- **project 由 `name` 界定**：工具只管理所读取 `hr-compose.yml`（当前目录优先，缺失时回退用户主目录）中定义的服务，不扫描系统上其他 unit；同一 `name:` 下的 unit 归属该 project，不同 project 互不影响。
+- **配置文件回退不放宽路径解析**：回退只换配置来源，字段语义不变——`command` / `working_dir` 仍原样透传给 systemd，不会按 yml 所在目录解释，跨目录共用同一份配置时建议写绝对路径；`std_output: file:` 与 `log_file` 本就要求绝对路径。另外，已有 `~/hr-compose.yml` 时在某目录执行 `init` 会生成一份优先于主目录的本地配置。
 - **从旧版升级（破坏性）**：`name` 为必填，旧 yml 需补 `name:` 才能继续使用；且 unit 文件名由 `<service>.service` 变为 `<name>-<service>.service`，旧 unit 不会被新版 `down` 清理——升级前先 `down` 旧服务（或手动 `systemctl stop/disable <svc>.service` 并删除对应文件），再用新版 `up`。
 - **ps 彩色输出**：终端下状态自动着色，管道/重定向自动无色；设 `NO_COLOR=1` 可强制关闭。
 

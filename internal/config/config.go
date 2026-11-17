@@ -132,8 +132,62 @@ func (s *Service) EffectiveUser() string {
 	return userResolver()
 }
 
-// DefaultPath 返回默认编排文件路径（当前目录）。
-func DefaultPath() string { return "hr-compose.yml" }
+// defaultFileName 是编排文件的默认文件名，当前目录与用户主目录共用。
+const defaultFileName = "hr-compose.yml"
+
+// DefaultPath 返回默认编排文件名（相对当前目录；init 用它在本目录创建新文件）。
+func DefaultPath() string { return defaultFileName }
+
+// cwdResolver 返回当前工作目录，包级变量便于测试注入。
+var cwdResolver = os.Getwd
+
+// homeDirResolver 解析执行命令的真实用户主目录，口径与 userResolver 一致：sudo 下
+// HOME 已被重置为 /root，SUDO_USER 的家目录才是用户放配置的地方。包级变量便于测试注入。
+var homeDirResolver = func() (string, error) {
+	if sudo := os.Getenv("SUDO_USER"); sudo != "" {
+		if u, err := user.Lookup(sudo); err == nil && u.HomeDir != "" {
+			return u.HomeDir, nil
+		}
+	}
+	return os.UserHomeDir()
+}
+
+// ResolvePath 解析实际使用的编排文件路径：
+//   - explicit（--file）非空时原样返回，显式指定优先且不回退；
+//   - 当前目录存在 hr-compose.yml 时用当前目录的（保持既有行为）；
+//   - 否则回退到执行用户主目录下的 hr-compose.yml，使同一份配置在任意目录可用；
+//   - 两处都没有时返回错误，列出查找过的位置，避免只报一句"文件不存在"。
+func ResolvePath(explicit string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	cwd, err := cwdResolver()
+	if err != nil {
+		return "", fmt.Errorf("获取当前目录: %w", err)
+	}
+	local := filepath.Join(cwd, defaultFileName)
+	if isRegularFile(local) {
+		return local, nil
+	}
+	home, homeErr := homeDirResolver()
+	if homeErr != nil || home == "" {
+		return "", fmt.Errorf("未找到编排文件: 当前目录 %s 下无 %s（可用 --file 指定路径）", local, defaultFileName)
+	}
+	fallback := filepath.Join(home, defaultFileName)
+	if isRegularFile(fallback) {
+		return fallback, nil
+	}
+	if fallback == local { // 用户就在主目录下执行，两处是同一路径，不必重复列一遍
+		return "", fmt.Errorf("未找到编排文件: 当前目录 %s 下无 %s（可用 --file 指定路径）", local, defaultFileName)
+	}
+	return "", fmt.Errorf("未找到编排文件: 当前目录 %s 与用户主目录 %s 下均无 %s（可用 --file 指定路径）", local, fallback, defaultFileName)
+}
+
+// isRegularFile 判断路径是存在的常规文件（跟随符号链接）；同名目录不算。
+func isRegularFile(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular()
+}
 
 // Load 读取并校验编排文件。
 func Load(path string) (*Config, error) {

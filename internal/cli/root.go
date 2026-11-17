@@ -19,7 +19,7 @@ func Execute(version string) error {
 
 func init() {
 	// 注：--file 不设 -f 简写——logs 命令的 -f 已用于 --follow，cobra 合并子命令标志集时会因简写冲突 panic。
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "file", "", "编排文件路径（默认当前目录 hr-compose.yml）")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "file", "", "编排文件路径（默认当前目录 hr-compose.yml，缺失时回退用户主目录）")
 	rootCmd.AddCommand(upCmd, downCmd, startCmd, stopCmd, restartCmd, enableCmd, disableCmd, psCmd, logsCmd, configCmd, initCmd, cleanCmd)
 }
 
@@ -33,9 +33,9 @@ var rootCmd = &cobra.Command{
 
 // load 读取编排文件并构造引擎。
 func load() (*engine.Engine, error) {
-	path := cfgFile
-	if path == "" {
-		path = config.DefaultPath()
+	path, err := config.ResolvePath(cfgFile)
+	if err != nil {
+		return nil, err
 	}
 	cfg, err := config.Load(path)
 	if err != nil {

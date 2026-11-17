@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -640,5 +641,122 @@ func TestLoadRejectsRelativeLogFile(t *testing.T) {
 	p = writeFixture(t, "name: testproj\nservices:\n  api:\n    command: /x/api\n    log_file: /var/log/app/*.log\n")
 	if _, err := Load(p); err != nil {
 		t.Errorf("log_file 绝对 glob 应合法, err=%v", err)
+	}
+}
+
+// withPathResolvers 覆盖路径解析依赖（cwd 与 home），t.Cleanup 自动还原。
+func withPathResolvers(t *testing.T, cwd, home string, homeErr error) {
+	t.Helper()
+	oldCwd, oldHome := cwdResolver, homeDirResolver
+	t.Cleanup(func() { cwdResolver, homeDirResolver = oldCwd, oldHome })
+	cwdResolver = func() (string, error) { return cwd, nil }
+	homeDirResolver = func() (string, error) { return home, homeErr }
+}
+
+// writeConfigAt 在 dir 下写一份最小合法编排文件，返回其路径。
+func writeConfigAt(t *testing.T, dir string) string {
+	t.Helper()
+	p := filepath.Join(dir, defaultFileName)
+	if err := os.WriteFile(p, []byte("name: t\nservices:\n  a:\n    command: /bin/true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestResolvePathExplicitWins(t *testing.T) {
+	withPathResolvers(t, t.TempDir(), t.TempDir(), nil)
+	explicit := filepath.Join(t.TempDir(), "custom.yml")
+	got, err := ResolvePath(explicit)
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	if got != explicit {
+		t.Errorf("ResolvePath = %q, want %q（--file 应原样使用且不回退）", got, explicit)
+	}
+}
+
+func TestResolvePathPrefersCurrentDir(t *testing.T) {
+	cwd, home := t.TempDir(), t.TempDir()
+	want := writeConfigAt(t, cwd)
+	writeConfigAt(t, home)
+	withPathResolvers(t, cwd, home, nil)
+	got, err := ResolvePath("")
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	if got != want {
+		t.Errorf("ResolvePath = %q, want %q（当前目录优先）", got, want)
+	}
+}
+
+func TestResolvePathFallsBackToHome(t *testing.T) {
+	cwd, home := t.TempDir(), t.TempDir()
+	want := writeConfigAt(t, home)
+	withPathResolvers(t, cwd, home, nil)
+	got, err := ResolvePath("")
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	if got != want {
+		t.Errorf("ResolvePath = %q, want %q（当前目录缺失应回退用户主目录）", got, want)
+	}
+}
+
+func TestResolvePathNotFoundReportsSearchedLocations(t *testing.T) {
+	cwd, home := t.TempDir(), t.TempDir()
+	withPathResolvers(t, cwd, home, nil)
+	_, err := ResolvePath("")
+	if err == nil {
+		t.Fatal("两处都没有编排文件时应报错")
+	}
+	for _, want := range []string{filepath.Join(cwd, defaultFileName), filepath.Join(home, defaultFileName), "--file"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("错误信息 %q 应包含 %q", err, want)
+		}
+	}
+}
+
+func TestResolvePathHomeUnavailable(t *testing.T) {
+	cwd := t.TempDir()
+	withPathResolvers(t, cwd, "", errors.New("无主目录"))
+	_, err := ResolvePath("")
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if !strings.Contains(err.Error(), filepath.Join(cwd, defaultFileName)) {
+		t.Errorf("错误信息 %q 应包含当前目录路径", err)
+	}
+	if strings.Contains(err.Error(), "用户主目录") {
+		t.Errorf("主目录不可用时不应列出主目录路径: %v", err)
+	}
+}
+
+func TestResolvePathIgnoresDirectoryNamedConfig(t *testing.T) {
+	// 当前目录下同名的是目录而非文件，应继续回退，而不是把它当编排文件去解析。
+	cwd, home := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, defaultFileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := writeConfigAt(t, home)
+	withPathResolvers(t, cwd, home, nil)
+	got, err := ResolvePath("")
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	if got != want {
+		t.Errorf("ResolvePath = %q, want %q（同名目录不算配置文件）", got, want)
+	}
+}
+
+func TestResolvePathHomeSameAsCwd(t *testing.T) {
+	// 在主目录下执行且没有配置时，当前目录与主目录是同一路径，错误信息不应把同一路径列两遍。
+	home := t.TempDir()
+	withPathResolvers(t, home, home, nil)
+	_, err := ResolvePath("")
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if got := strings.Count(err.Error(), filepath.Join(home, defaultFileName)); got != 1 {
+		t.Errorf("同一路径应只出现一次，实际 %d 次: %v", got, err)
 	}
 }
