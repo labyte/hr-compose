@@ -1,6 +1,6 @@
 # hr-compose 离线安装与使用指南
 
-> 当前版本：**v0.6.1**
+> 当前版本：**v0.6.2**
 
 > 适用于**目标服务器无外网 / 受限内网**环境。本文假设你已经拿到了发行包（tar.gz），从「安装 → 使用 → 更新卸载」全流程说明。
 
@@ -19,6 +19,8 @@
 | --- | --- | --- |
 | `x86_64` / `amd64` | amd64 | `hr-compose_<版本>_linux_amd64.tar.gz` |
 | `aarch64` / `arm64` | arm64 | `hr-compose_<版本>_linux_arm64.tar.gz` |
+
+> 每个 release 还附带本手册的 PDF 版 `hr-compose_<版本>_offline-install.pdf`，适合在无网络、只能带文档进现场的机器上查阅；它与 tar.gz 同版本号，但不参与 `checksums.txt`（校验和只覆盖可执行产物）。
 
 ---
 

@@ -1,6 +1,8 @@
 # 构建产物
 /bin/
 /dist/
+# make docs 的离线手册 PDF 与中间 HTML 都在这里生成
+/build/
 
 # 测试产物
 *.test

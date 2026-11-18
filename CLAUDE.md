@@ -28,12 +28,14 @@ make vet          # go vet ./...
 make lint         # golangci-lint run（工具为 v2 线，.golangci.yml 用 version: 2 格式）
 make fmt          # gofmt -w .
 make cross        # 交叉编译 linux/amd64 + linux/arm64 + darwin/arm64
+make docs         # 离线手册 PDF → build/hr-compose_<版本>_offline-install.pdf（需 pandoc + 无头 chrome；只给发布流水线用，不在 build/cross 依赖链上）
 ```
 
 - 跑单个测试：`go test ./internal/engine -run TestOrderDependsFirst -v`
 - CI（`.github/workflows/ci.yml`）依次跑：`go vet ./...` → `go test -race ./...` → golangci-lint（`golangci-lint-action@v9` + `version: v2.15`）→ `make cross`。
 - `e2e/smoke.sh` 是端到端冒烟（真实 systemd + root，单测环境跑不了），已接入 CI 的 e2e job（ubuntu runner 以 sudo 执行 up/ps/stop/start/down）；本地 Linux 可 `bash e2e/smoke.sh` 直接跑。
 - **发布新 tag 时同步更新文档版本号**：`README.md` 与 `offline-install.md` 标题后一行的"当前版本"都要随 tag 一并改成新版本号（如 `v0.5.5`），保持一致，勿只打 tag 不改文档。发布流程：`git tag -a vX.Y.Z -m "..." && git push origin main && git push origin vX.Y.Z`（tag 触发 goreleaser 出正式产物）；本地二进制版本经 `make build` 的 ldflags 注入，tag 之后需重新 `make build` 才会显示新版本。
+- **离线手册 PDF 随 release 出**：`.github/workflows/release.yml` 在 goreleaser 之前先 `apt-get install pandoc fonts-noto-cjk`、再 `make docs DOC_VERSION="${GITHUB_REF_NAME#v}"`（pandoc 转 HTML + 无头 Chrome 打印），产物由 `.goreleaser.yaml` 的 `release.extra_files` 以 `build/hr-compose_<版本>_offline-install.pdf` 上传，文件名版本段与 goreleaser 的 tar.gz 同风格（不带前导 `v`）。三条约束别破：产物必须落 `build/`——`release --clean` 会整体删掉 `dist/`；`extra_files` 不进 `checksums.txt`、名字取磁盘原名（不能用 `{{.Version}}` 模板），所以版本号在 Makefile 里拼；中文渲染完全依赖 CI 装的 `fonts-noto-cjk`，缺字体就是一整本方框。样式表 `offline-install.css` 只服务于打印（`--embed-resources` 内联），其中长命令行必须 `white-space: pre-wrap`——`offline-install.md` 有 30 多行超 120 字符、最长 416 字符，不折行会被页边裁掉。本地跑 `make docs` 需自备 pandoc 与 chrome（`PDF_BROWSER` 可覆盖浏览器、`PDF_FLAGS` 可换打印参数）。
 
 ## 架构与数据流
 

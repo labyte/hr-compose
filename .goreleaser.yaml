@@ -23,6 +23,11 @@ checksum:
 
 # install.sh 作为发行资产一并发布，使 online 安装命令可用：
 #   curl -fsSL .../releases/latest/download/install.sh | sh
+# 离线手册 PDF 由 release.yml 里的 `make docs` 预先生成，落在 build/ 而非 dist/：
+# `release --clean` 开跑时会整体删除 dist/，放那里的话会被连带删掉、glob 落空。
+# 注：extra_files 只上传、不参与 checksums.txt（校验和覆盖的是 goreleaser 自己的产物），
+# 且文件名取磁盘原名（不能用 {{.Version}} 模板），故版本名由 Makefile 的 DOC_VERSION 拼出。
 release:
   extra_files:
     - glob: install.sh
+    - glob: build/hr-compose_*_offline-install.pdf

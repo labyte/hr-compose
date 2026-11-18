@@ -1,6 +1,6 @@
 # hr-compose
 
-> 当前版本：**v0.6.1**
+> 当前版本：**v0.6.2**
 
 > 对标 docker-compose 的本地服务编排工具（CLI）：读一份 `hr-compose.yml`，基于 systemd 在 Linux 裸机上管理多个业务服务的启停与编排。
 
