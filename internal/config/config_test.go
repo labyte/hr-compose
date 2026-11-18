@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -758,5 +759,98 @@ func TestResolvePathHomeSameAsCwd(t *testing.T) {
 	}
 	if got := strings.Count(err.Error(), filepath.Join(home, defaultFileName)); got != 1 {
 		t.Errorf("同一路径应只出现一次，实际 %d 次: %v", got, err)
+	}
+}
+
+// --- homeDirResolver 的真实取值口径（上面的 ResolvePath 用例都把它替换成了桩）---
+
+// setHomeEnv 同时覆盖 SUDO_USER 与 HOME，t.Setenv 自动还原。
+// 注：t.Setenv 无法真正 unset，但代码按 os.Getenv 是否为空串判断，置空等价于未设。
+func setHomeEnv(t *testing.T, sudoUser, home string) {
+	t.Helper()
+	t.Setenv("SUDO_USER", sudoUser)
+	t.Setenv("HOME", home)
+}
+
+func TestHomeDirResolverPrefersSudoUser(t *testing.T) {
+	// sudo 下进程是 root、HOME 已被重置为 /root，主目录必须按 SUDO_USER 查 passwd，
+	// 否则回退去找的是 /root/hr-compose.yml，用户放在自己家目录的配置永远命中不了。
+	cur, err := user.Current()
+	if err != nil {
+		t.Skipf("无法获取当前用户: %v", err)
+	}
+	u, err := user.Lookup(cur.Username)
+	if err != nil || u.HomeDir == "" {
+		t.Skipf("用户 %q 不在 passwd 中，无法断言 Lookup 结果: %v", cur.Username, err)
+	}
+	setHomeEnv(t, cur.Username, filepath.Join(t.TempDir(), "root")) // 故意给 HOME 塞个假值，证明取值不来自 $HOME
+	home, err := homeDirResolver()
+	if err != nil {
+		t.Fatalf("homeDirResolver: %v", err)
+	}
+	if home != u.HomeDir {
+		t.Errorf("homeDirResolver = %q, want %q（应按 SUDO_USER 查 passwd）", home, u.HomeDir)
+	}
+}
+
+func TestHomeDirResolverWithoutSudoUsesHomeEnv(t *testing.T) {
+	home := t.TempDir()
+	setHomeEnv(t, "", home)
+	got, err := homeDirResolver()
+	if err != nil {
+		t.Fatalf("homeDirResolver: %v", err)
+	}
+	if got != home {
+		t.Errorf("homeDirResolver = %q, want %q（非 sudo 下取 $HOME）", got, home)
+	}
+}
+
+func TestHomeDirResolverUnknownSudoUserFallsBackToHomeEnv(t *testing.T) {
+	// SUDO_USER 指向 passwd 里查不到的用户（账户已删等）时退回 $HOME，不因查不到用户直接报错。
+	home := t.TempDir()
+	setHomeEnv(t, "no-such-user-for-test", home)
+	got, err := homeDirResolver()
+	if err != nil {
+		t.Fatalf("homeDirResolver: %v", err)
+	}
+	if got != home {
+		t.Errorf("homeDirResolver = %q, want %q（查不到 SUDO_USER 应退回 $HOME）", got, home)
+	}
+}
+
+func TestInitInHomeDirResolvesFromAnyDir(t *testing.T) {
+	// 完整链路：在登录目录执行 init 生成一份配置，之后在任意目录执行命令都回退命中它，
+	// 且命中的文件可直接 Load（模板本身就是合法配置）。
+	root := t.TempDir()
+	home := filepath.Join(root, "loginhome") // 登录目录（放全局配置）
+	cwd := filepath.Join(root, "workdir")    // 执行命令时所在的目录，本身没有配置
+	for _, d := range []string{home, cwd} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withPathResolvers(t, cwd, home, nil)
+
+	p := filepath.Join(home, DefaultPath())
+	if err := Init(p); err != nil {
+		t.Fatalf("Init(%s): %v", p, err)
+	}
+	got, err := ResolvePath("")
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	if got != p {
+		t.Errorf("ResolvePath = %q, want 登录目录下的 %q", got, p)
+	}
+	cfg, err := Load(got)
+	if err != nil {
+		t.Fatalf("回退命中的配置应能直接加载: %v", err)
+	}
+	if len(cfg.Services) != 2 {
+		t.Errorf("模板应有 2 个服务，实际 %d", len(cfg.Services))
+	}
+	// 默认项目名取配置文件所在目录（登录目录）的 basename，不是执行命令时所在的目录名。
+	if cfg.Name != "loginhome" {
+		t.Errorf("name = %q, want loginhome（取登录目录名，非当前目录名）", cfg.Name)
 	}
 }

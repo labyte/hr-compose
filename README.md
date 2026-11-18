@@ -1,6 +1,6 @@
 # hr-compose
 
-> 当前版本：**v0.6.0**
+> 当前版本：**v0.6.1**
 
 > 对标 docker-compose 的本地服务编排工具（CLI）：读一份 `hr-compose.yml`，基于 systemd 在 Linux 裸机上管理多个业务服务的启停与编排。
 
@@ -133,13 +133,15 @@ sudo hr-compose restart api # 重启某个服务
 sudo hr-compose down        # 停止并清理（删除 unit 文件）
 ```
 
+> **想在任意目录直接执行命令**：把配置放在登录目录——`cd ~ && hr-compose init` 生成 `~/hr-compose.yml`（`init` 不需要 sudo）。之后当前目录没有 `hr-compose.yml` 且未用 `--file` 指定时，各命令自动回退读主目录这一份；当前目录有则以当前目录的优先。详见[编排文件参考](#编排文件参考)。
+
 ---
 
 ## 命令参考
 
 | 命令 | 说明 | 示例 |
 | --- | --- | --- |
-| `init [services-dir]` | 生成默认 `hr-compose.yml` 模板（已存在则不覆盖）；指定目录时扫描其直接子文件夹，每个子文件夹生成一个服务的初始配置（`command` + `working_dir`，不含依赖） | `hr-compose init` / `hr-compose init services` |
+| `init [services-dir]` | 生成默认 `hr-compose.yml` 模板（已存在则不覆盖）；只写在当前目录或 `--file` 指定的路径，不会自动写主目录。指定目录时扫描其直接子文件夹，每个子文件夹生成一个服务的初始配置（`command` + `working_dir`，不含依赖） | `hr-compose init` / `cd ~ && hr-compose init` / `hr-compose init services` |
 | `up [name...]` | 生成 unit 并启动服务：指定名字时自动带上其 `depends_on` 依赖（递归），不指定则全部；依赖者先启动，无依赖关系按 yml 声明顺序；重复执行幂等，unit 内容变化且服务在运行中时自动改为 restart；完成后复核启动结果并展示各服务状态，没起来的服务逐条报原因并以非 0 退出 | `sudo hr-compose up web` |
 | `start [name...]` | 启动已安装的服务（不重生成 unit），不指定则全部；需先 `up` 过。systemctl 返回 0 只代表任务受理，故收尾会复核进程是否真的起来了：复核通过才打印 OK，未起来的逐条报原因并以非 0 退出 | `sudo hr-compose start api web` |
 | `stop [name...]` | 停止服务（保留 unit 与 enable，不删除），不指定则全部 | `sudo hr-compose stop api` |
@@ -154,7 +156,7 @@ sudo hr-compose down        # 停止并清理（删除 unit 文件）
 
 > 所有接受服务名的命令（`up`/`down`/`start`/`stop`/`restart`/`enable`/`disable`/`clean`/`logs`/`config`）都支持一次指定多个服务，如 `hr-compose restart api web`；不指定则作用于全部。`up` 指定服务会**自动带上其 `depends_on` 依赖**（docker-compose 风格，首次 `up web` 会连 `api` 一起安装启动）；`down` 指定服务**只清理指定的**，不连带依赖，需连带清理时显式列出。
 
-全局参数：`--file <path>` 指定编排文件。未指定时先找当前目录的 `hr-compose.yml`，当前目录没有则回退到执行用户主目录下的 `hr-compose.yml`（`sudo` 下取 `SUDO_USER` 的家目录），因此同一份配置在不同目录都能直接用；两处都没有时报错并列出查找过的位置。`--file` 显式指定后不再回退。注意 `-f` 是 `logs` 的 `--follow` 简写。
+全局参数：`--file <path>` 指定编排文件。未指定时先找当前目录的 `hr-compose.yml`，当前目录没有则回退到执行用户主目录下的 `hr-compose.yml`（`sudo` 下取 `SUDO_USER` 的家目录），因此同一份配置在不同目录都能直接用；两处都没有时报错并列出查找过的位置。`--file` 显式指定后不再回退。主目录那份需要自己放：`cd ~ && hr-compose init`（见[编排文件参考](#编排文件参考)）。注意 `-f` 是 `logs` 的 `--follow` 简写。
 
 ### ps 状态列说明
 
@@ -179,6 +181,19 @@ unit 实际文件路径不在此展示，用 `hr-compose config` 预览时会在
 ## 编排文件参考
 
 默认读取当前目录的 `hr-compose.yml`；当前目录没有时回退到执行用户主目录下的 `hr-compose.yml`（`~`，`sudo` 下为 `SUDO_USER` 的家目录）。`--file` 可显式指定路径，指定后不再回退。
+
+主目录那份文件由你自己放置——工具不会自动往 `~` 写任何东西。两种等价写法：
+
+```bash
+cd ~ && hr-compose init                    # 在登录目录生成 ~/hr-compose.yml
+hr-compose init --file ~/hr-compose.yml    # 人在别的目录，直接写到主目录
+```
+
+放好之后，在任意目录执行 `hr-compose ps`、`sudo hr-compose up` 都读到同一份配置（当前目录若也有 `hr-compose.yml`，以当前目录的优先）。几点注意：
+
+- `init` 不需要 root，别用 `sudo hr-compose init`——文件属主会变成 root，之后普通用户改不动。
+- 主目录生成的默认项目名取主目录名（如 `/home/app` → `name: app`），它会成为 unit 文件名前缀，建议改成自己的项目名。
+- 回退只换配置来源，不改字段语义：`command` / `working_dir` 仍按原样交给 systemd，跨目录共用一份配置时请写绝对路径。
 
 ### 最小配置示例
 
@@ -321,6 +336,9 @@ hr-compose config --real     # 查看磁盘上实际的 unit 文件内容，对�
 systemctl status <name>-<svc>.service   # 查看 systemd 层面的真实状态
 journalctl -u <name>-<svc>.service      # 查看 journal 日志
 ```
+
+- **报 `未找到编排文件`**：错误信息会列出查找过的两个路径（当前目录与用户主目录）。三种解法任选：在当前位置 `hr-compose init` 一份项目配置；`cd ~ && hr-compose init` 放一份全局配置（此后任意目录都能直接执行）；或用 `--file <path>` 指定——注意显式指定后不再回退，路径写错就直接报文件不存在。
+- **改了 `~/hr-compose.yml` 却不生效**：当前目录若也有一份 `hr-compose.yml`，它会遮住主目录那份（当前目录优先）。用 `ls -l ./hr-compose.yml` 确认当前目录有没有，再决定改哪一份——或者把 `--file ~/hr-compose.yml` 显式写上，绕过回退规则。
 
 ---
 

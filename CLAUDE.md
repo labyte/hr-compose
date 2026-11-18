@@ -71,7 +71,7 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 
 ## 易错点
 
-- **配置文件位置解析**：不传 `--file` 时先找当前目录 `hr-compose.yml`，没有则回退执行用户主目录（sudo 下 HOME 已被重置为 `/root`，故 `homeDirResolver` 按 `SUDO_USER` 查该用户的家目录）。两处都没有时报错并列出两个路径；`--file` 显式指定后不回退。`init` 不受回退影响，始终在当前位置（或 `--file`）创建。回退只换配置来源，不改变字段语义——`command`/`working_dir` 仍原样透传给 systemd，不按 yml 所在目录解析，跨目录使用建议写绝对路径。
+- **配置文件位置解析**：不传 `--file` 时先找当前目录 `hr-compose.yml`，没有则回退执行用户主目录（sudo 下 HOME 已被重置为 `/root`，故 `homeDirResolver` 按 `SUDO_USER` 查该用户的家目录）。两处都没有时报错并列出两个路径；`--file` 显式指定后不回退。`init` 不受回退影响，始终在当前位置（或 `--file`）创建。**主目录那份配置由用户自己放**（`cd ~ && hr-compose init`，或等价地在任意目录 `hr-compose init --file ~/hr-compose.yml`）——刻意不让工具自动往 `~` 写文件：落盘位置必须显式可控，静默改用户家目录、以及全局配置与项目本地配置自动漂移都不可接受。`init` 不需要 root，用 `sudo` 跑会把 `~/hr-compose.yml` 的属主变成 root（后续普通用户改不动），README 里明确劝阻。回退只换配置来源，不改变字段语义——`command`/`working_dir` 仍原样透传给 systemd，不按 yml 所在目录解析，跨目录使用建议写绝对路径。
 - **`-f` 简写归 `logs` 的 `--follow` 专用**：root 的 `--file` 有意不设简写，否则 cobra 合并子命令标志集时因重复 `-f` panic。回归测试 `TestLogsFlagShorthandNoConflict` 保护，新增全局/子命令标志时勿用 `-f` 简写。
 - **`sudo hr-compose` 报 command not found**：sudo 按 `/etc/sudoers` 的 `secure_path` 重置 PATH（Ubuntu 默认只有 `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin`），`$GOPATH/bin`、`$HOME/.local/bin` 都不在其中——装到那里只有普通 shell 能用，而 `up`/`down`/`start`/`stop`/`restart` 恰恰必须提权。故 `make install` 默认 `PREFIX=/usr/local`（可 `PREFIX=$HOME/.local` 装用户目录、`DESTDIR=` 做打包暂存），且**刻意不依赖 `build`**：sudo 下找不到 `go`，而以 root 跑 `go build` 会往用户 module cache 写 root 属主文件、害后续非 root 构建报权限错。正确顺序 `make build && sudo make install`；缺产物时 install 直接报"未找到 bin/hr-compose，请先执行 make build"而不是甩一堆 make 错。同一台机器别留多份（`~/go/bin` + `~/.local/bin` + `/usr/local/bin`），PATH 顺序会让旧版遮住新版，排查用 `which -a hr-compose` 逐个 `--version`。
 - **`std_output` 默认丢弃输出**：未配置时 `EffectiveStdOutput()` 返回 `"null"`（生成 `StandardOutput=null`），日志由业务程序自行管理；要进 journald 需显式 `std_output: journal`。丢弃输出直接裸写 `std_output: null`（YAML null 字面量 → 字段为空 → 走空值默认 null，无需加引号）；`none` 为兼容旧写法，同样归一为 null。
@@ -93,5 +93,6 @@ internal/systemctl/ 封装 systemctl / journalctl，Client 接口化便于测试
 - `internal/systemctl` 的测试用 `fakeSystemctl(t, stdout, stderr, exitCode)` 在 `PATH` 最前面放假脚本（`t.Setenv` 自动恢复），使 `Real.Show/ShowMany` 的输出解析与错误包装在没有 systemd 的环境（CI 容器、非 systemd 主机）里也能跑，不必依赖真机。
 - `ps` 的彩色输出通过包级变量 `stdout`（写入目标）与 `colorOverride`（颜色强制开关 `""/always/never`）覆盖测试；颜色逻辑在 `color.go`（`colorsOn`/`stateColors`）。
 - `config` 测试用 `t.TempDir()` 写 fixture yaml 后 `Load`，断言合法/非法用例。
+- 主目录回退：`TestInitInHomeDirResolvesFromAnyDir` 串起"登录目录 init → 任意目录 `ResolvePath` 命中 → `Load` 得到合法配置"整条链路（并断言默认项目名取登录目录名而非当前目录名）；`TestHomeDirResolver*` 三条覆盖真实 `homeDirResolver` 的取值口径（`SUDO_USER` 查 passwd、无 `SUDO_USER` 取 `$HOME`、`SUDO_USER` 查不到该用户时退回 `$HOME`）——`ResolvePath` 既有用例都经 `withPathResolvers` 把两个 resolver 换成桩，改 `homeDirResolver` 本体的逻辑必须看这三条测试。
 - `testdata/` 下有 valid 与 3 个 invalid 样例，`e2e/README.md` 有完整冒烟流程。
 - 注释、错误信息、README 均为中文，新增代码保持中文注释风格。
